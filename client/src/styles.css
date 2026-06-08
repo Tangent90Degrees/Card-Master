@@ -1,0 +1,885 @@
+:root {
+    --card-w: 72px;
+    --card-h: 104px;
+    --felt: #1f6e43;
+    --felt-dark: #185737;
+    --ink: #1c2128;
+    --panel: #ffffff;
+    --accent: #2d6cdf;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    font-family:
+        system-ui,
+        -apple-system,
+        Segoe UI,
+        Roboto,
+        sans-serif;
+    color: var(--ink);
+    background: #0e2a1c;
+}
+
+/* ---------- Lobby ---------- */
+.lobby {
+    min-height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: radial-gradient(circle at 50% 20%, #2a8a57, #0e2a1c);
+}
+.lobby-card {
+    width: min(420px, 100%);
+    background: var(--panel);
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+.lobby-card h1 {
+    margin: 0 0 4px;
+    font-size: 28px;
+}
+.tagline {
+    margin: 0 0 20px;
+    color: #5a6573;
+    font-size: 14px;
+}
+.lobby h2 {
+    font-size: 15px;
+    margin: 18px 0 8px;
+}
+.lobby label {
+    display: block;
+    font-size: 13px;
+    color: #5a6573;
+    margin-bottom: 12px;
+}
+.lobby input,
+.lobby select {
+    width: 100%;
+    margin-top: 4px;
+    padding: 10px;
+    border: 1px solid #cdd5df;
+    border-radius: 8px;
+    font-size: 15px;
+}
+.lobby .row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+.lobby .row input {
+    flex: 1;
+}
+.lobby .mini {
+    flex: 1;
+}
+.lobby button {
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    background: #e7ebf1;
+    font-size: 15px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.lobby button.primary,
+.lobby button:hover:not(:disabled) {
+    background: var(--accent);
+    color: #fff;
+}
+.lobby button.primary {
+    width: 100%;
+    margin-top: 12px;
+}
+.lobby button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.divider {
+    text-align: center;
+    color: #9aa4b2;
+    margin: 16px 0;
+    font-size: 13px;
+}
+.warn {
+    color: #b26b00;
+    font-size: 13px;
+}
+.error {
+    color: #c0392b;
+    font-size: 13px;
+}
+
+/* ---------- Game layout ---------- */
+/* The table fills the area below the top bar; the hand floats over its bottom
+   edge (see .hand), so the felt shows through its frosted glass. */
+.game {
+    position: relative;
+    height: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+        'top'
+        'table';
+}
+.topbar {
+    grid-area: top;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 16px;
+    background: #11261b;
+    color: #e8f5ee;
+}
+.brand {
+    font-weight: 700;
+}
+.room-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+}
+.room-code {
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+.deck-info {
+    color: #9fc7b1;
+}
+.link-btn,
+.reset-btn {
+    border: 1px solid #3c6b52;
+    background: transparent;
+    color: #d6efe0;
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 13px;
+}
+.link-btn:hover,
+.reset-btn:hover {
+    background: #1c4631;
+}
+.topbar-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* ---------- Table ---------- */
+.table {
+    grid-area: table;
+    position: relative;
+    overflow: hidden;
+    background: radial-gradient(circle at 50% 40%, var(--felt), var(--felt-dark));
+    touch-action: none;
+    user-select: none;
+}
+.pile {
+    position: absolute;
+    width: var(--card-w);
+    height: var(--card-h);
+    cursor: grab;
+    /* Contain the selection ring's / count badge's z-index inside each pile so an
+       overlapping pile that paints later fully occludes a lower pile's ring. */
+    isolation: isolate;
+    /* Smoothly settle into place on drop / merge. Disabled while dragging so the
+       pile tracks the pointer exactly (see .pile.dragging). */
+    transition:
+        left 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+        top 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.pile.stacked {
+    filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.25));
+}
+.pile.stacked::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translate(3px, 3px);
+    border-radius: 8px;
+    background: #c9d2dc;
+    z-index: -1;
+}
+.pile.dragging {
+    cursor: grabbing;
+    z-index: 1000;
+    filter: drop-shadow(4px 8px 8px rgba(0, 0, 0, 0.4));
+    transition: none; /* track the pointer exactly, no lag */
+}
+.pile.settling {
+    z-index: 900; /* slide above other piles while merging onto a deck */
+    filter: drop-shadow(4px 8px 8px rgba(0, 0, 0, 0.4));
+}
+.pile.selected::after {
+    /* Yellow highlight ring for marquee-selected piles — mirrors the hand area's
+       drag-selection outline (.hand-card.active) for a unified look. Drawn as an
+       overlay so it never overrides the pile's own drag shadow / z-index. */
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 10px;
+    border: 2px solid #f2c14e;
+    box-shadow: 0 0 0 2px rgba(242, 193, 78, 0.22);
+    pointer-events: none;
+    z-index: 5;
+}
+
+/* Drop-target outline: a card being dragged would land on this pile. Matches the
+   zone drop-target highlight (filled yellow) so the cue reads consistently. */
+.pile.highlight::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 10px;
+    border: 2px solid #f2c14e;
+    background: rgba(242, 193, 78, 0.18);
+    pointer-events: none;
+    z-index: 4;
+}
+
+/* Rubber-band selection rectangle drawn over the felt (same yellow accent). */
+.marquee {
+    position: absolute;
+    z-index: 800;
+    border: 1px solid #f2c14e;
+    background: rgba(242, 193, 78, 0.12);
+    border-radius: 3px;
+    pointer-events: none;
+}
+/* Red count capsule with a centered white number, on table piles and zone items.
+   Sits above the selection ring (z-index 5) so a marquee never hides the count. */
+.count-badge {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 18px;
+    /* Extra bottom padding shifts the flex-centered number up a touch, correcting
+       the numeral baseline that otherwise sits low. */
+    padding: 0 8px 2px;
+    border-radius: 999px;
+    background: #d63a3a;
+    color: #fff;
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 700;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* ---------- Cards ---------- */
+/* Flip wrapper: gives the card 3D depth and a transform origin to rotate around. */
+.card-flip {
+    width: var(--card-w);
+    height: var(--card-h);
+    perspective: 700px;
+}
+.card-flip-inner {
+    width: var(--card-w);
+    height: var(--card-h);
+    transform-origin: center;
+    will-change: transform;
+}
+.card {
+    width: var(--card-w);
+    height: var(--card-h);
+    border-radius: 8px;
+    background: #fff;
+    border: 1px solid #cfd6df;
+    position: relative;
+    overflow: hidden;
+}
+.card-back {
+    background: repeating-linear-gradient(45deg, #2d6cdf 0 6px, #1d4ea8 6px 12px);
+    border-color: #14306a;
+}
+.card-face .pip {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 40px;
+}
+.card-face.red {
+    color: #c0392b;
+}
+.card-face.black {
+    color: #1c2128;
+}
+.card-face .corner {
+    position: absolute;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+}
+.card-face .corner.tl {
+    top: 4px;
+    left: 5px;
+}
+.card-face .corner.br {
+    bottom: 4px;
+    right: 5px;
+    transform: rotate(180deg);
+}
+.card-face.joker .corner {
+    font-size: 9px;
+}
+.card-face.joker.joker-color {
+    color: #8e44ad;
+} /* colored joker (purple) */
+.card-face.joker.joker-mono {
+    color: #7a7a7a;
+} /* monochrome joker (gray) */
+
+/* ---------- Player seats (around the table edges) ---------- */
+.seats {
+    position: absolute;
+    inset: 0;
+    pointer-events: none; /* never block dragging cards underneath */
+    z-index: 2;
+}
+.seat {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    max-width: 170px;
+    color: #e8f5ee;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.seat-info {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+}
+.seat.offline {
+    opacity: 0.45;
+}
+.avatar {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 16px;
+    color: #fff;
+    border: 2px solid rgba(255, 255, 255, 0.75);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+.seat.me .avatar {
+    border-color: #f2c14e;
+    box-shadow:
+        0 0 0 2px #f2c14e,
+        0 2px 6px rgba(0, 0, 0, 0.45);
+}
+.seat-name {
+    max-width: 116px;
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.seat-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #cdeadb;
+}
+.seat .avatar,
+.seat .seat-btn {
+    pointer-events: auto; /* clickable even though .seats ignores pointer events */
+}
+.empty-avatar {
+    background: transparent;
+    border-style: dashed;
+    border-color: rgba(255, 255, 255, 0.4);
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 600;
+}
+.seat-name.muted {
+    color: rgba(255, 255, 255, 0.5);
+}
+.seat-btn {
+    border: 1px solid #3c6b52;
+    background: #143626;
+    color: #d6efe0;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+}
+.seat-btn.sit {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+.seat-btn:hover {
+    filter: brightness(1.15);
+}
+
+/* Spectator count shown in the title bar. */
+.spec-count {
+    color: #9fc7b1;
+}
+
+/* ---------- Hand ---------- */
+/* A rounded panel floating above the felt with a frosted-glass effect. */
+.hand {
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    bottom: 14px;
+    z-index: 50;
+    min-height: 132px;
+    padding: 10px 16px 14px;
+    border-radius: 18px;
+    background: rgba(11, 28, 20, 0.5);
+    backdrop-filter: blur(14px) saturate(1.3);
+    -webkit-backdrop-filter: blur(14px) saturate(1.3);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow:
+        0 12px 34px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition:
+        border-color 0.12s,
+        background 0.12s;
+}
+/* Drop-target glow when a dragged card/pile/selection hovers over the hand. */
+.hand.highlight {
+    border-color: #f2c14e;
+    background: rgba(242, 193, 78, 0.16);
+}
+.hand-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    gap: 12px;
+}
+.hand-label {
+    color: #8fb9a2;
+    font-size: 12px;
+    text-transform: uppercase;
+}
+.hand-controls {
+    display: flex;
+    gap: 6px;
+}
+.hand-controls button {
+    border: 1px solid #2f5d45;
+    background: #143626;
+    color: #d6efe0;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.hand-controls button:hover:not(:disabled) {
+    background: #1c4631;
+}
+.hand-controls button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+/* A single row. Cards step by --hand-step (set in JS to fit the width); when
+   that's narrower than a card they overlap instead of wrapping. */
+.hand-cards {
+    position: relative;
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    align-items: flex-end;
+    min-height: var(--card-h);
+}
+.hand-empty {
+    color: #5d7a6b;
+    font-size: 13px;
+}
+.hand-card {
+    position: relative;
+    cursor: grab;
+    touch-action: none;
+    margin-left: calc(var(--hand-step, 80px) - var(--card-w));
+    transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform;
+}
+.hand-card:first-child {
+    margin-left: 0;
+}
+/* The hover fan (revealing the hovered card without overflowing the panel) is
+   computed and applied in JS — see Hand.jsx. */
+
+/* The grabbed card: it stays in the row and sorts among the others as you drag,
+   lifted via shadow/outline (not transform, which the FLIP animation controls). */
+.hand-card.active {
+    z-index: 10 !important;
+    cursor: grabbing;
+    border-radius: 8px;
+    outline: 2px solid #f2c14e;
+    outline-offset: 1px;
+    filter: drop-shadow(0 10px 12px rgba(0, 0, 0, 0.55));
+}
+
+/* The card being carried onto the table: a solid, lifted card sitting exactly
+   where it will drop. It tracks the cursor frame-by-frame (no position
+   transition, so no lag) and pops up smoothly when picked up off the hand. */
+.carry-card {
+    position: absolute;
+    width: var(--card-w);
+    height: var(--card-h);
+    pointer-events: none;
+    z-index: 500;
+    transform: scale(1.06) rotate(-2deg);
+    filter: drop-shadow(6px 14px 14px rgba(0, 0, 0, 0.5));
+    animation: card-lift 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes card-lift {
+    from {
+        transform: scale(0.92) rotate(0deg);
+    }
+    to {
+        transform: scale(1.06) rotate(-2deg);
+    }
+}
+
+/* ---------- Context menu ---------- */
+.menu-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+}
+.context-menu {
+    position: fixed;
+    z-index: 1600;
+    list-style: none;
+    margin: 0;
+    padding: 4px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    min-width: 180px;
+}
+.context-menu li {
+    padding: 7px 12px 7px 22px;
+    font-size: 14px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.context-menu li:not(.menu-label):not(.menu-divider):hover {
+    background: var(--accent);
+    color: #fff;
+}
+/* Group heading — not clickable. */
+.context-menu li.menu-label {
+    padding: 6px 12px 2px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #9aa4b2;
+    cursor: default;
+}
+/* Thin separator line between groups. */
+.context-menu li.menu-divider {
+    height: 1px;
+    margin: 4px 6px;
+    padding: 0;
+    background: #e4e8ee;
+    cursor: default;
+}
+/* Parent row that opens a submenu on hover. */
+.context-menu li.menu-parent {
+    position: relative;
+    padding-right: 24px;
+}
+.menu-arrow {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #9aa4b2;
+    font-size: 15px;
+}
+.context-menu li:hover > .menu-arrow {
+    color: #fff;
+}
+/* Submenu: nested under its parent row, opening to the right on hover. The
+   explicit dark color overrides the white inherited from the hovered parent row
+   (otherwise the second-level items would be white-on-white). */
+.context-menu .submenu {
+    position: absolute;
+    left: 100%;
+    top: -4px;
+    display: none;
+    color: #1a1a1a;
+}
+.context-menu li.menu-parent:hover > .submenu {
+    display: block;
+}
+
+/* ---------- Room settings modal ---------- */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1700;
+    background: rgba(0, 0, 0, 0.45);
+}
+.modal {
+    position: fixed;
+    z-index: 1800;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(420px, 92vw);
+    max-height: 84vh;
+    overflow-y: auto;
+    background: #fff;
+    color: var(--ink);
+    border-radius: 14px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    padding: 18px 20px 22px;
+}
+.modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.modal-head h2 {
+    margin: 0;
+    font-size: 18px;
+}
+.modal-close {
+    border: none;
+    background: transparent;
+    font-size: 18px;
+    cursor: pointer;
+    color: #7a8595;
+    line-height: 1;
+}
+.modal-close:hover {
+    color: var(--ink);
+}
+.modal-section {
+    margin-top: 18px;
+}
+.modal-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: #5a6573;
+    margin-bottom: 8px;
+}
+.modal-hint {
+    margin: 8px 0 0;
+    font-size: 12px;
+    color: #8a93a0;
+}
+.stepper {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+}
+.stepper button {
+    width: 34px;
+    height: 34px;
+    border: 1px solid #cdd5df;
+    background: #f1f4f8;
+    border-radius: 8px;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+}
+.stepper button:hover:not(:disabled) {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+.stepper button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.stepper-value {
+    font-size: 22px;
+    font-weight: 700;
+    min-width: 28px;
+    text-align: center;
+}
+.player-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.player-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid #eef1f5;
+    font-size: 14px;
+}
+.player-list li.offline {
+    opacity: 0.5;
+}
+.player-list .pl-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.player-list .pl-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.player-list .pl-status {
+    font-size: 12px;
+    color: #7a8595;
+}
+
+/* ---------- Zones ---------- */
+.zone {
+    position: absolute;
+    width: max-content;
+    /* Floor the width at two cards (cards + gap + item padding + border) so an
+       empty or single-card single-row zone is exactly as wide as a two-card one. */
+    min-width: calc(var(--card-w) * 2 + 24px);
+    max-width: 96%;
+    min-height: 132px;
+    display: flex;
+    flex-direction: column;
+    /* Frosted glass, matching the hand panel, so the felt shows through. */
+    background: rgba(11, 28, 20, 0.5);
+    backdrop-filter: blur(14px) saturate(1.3);
+    -webkit-backdrop-filter: blur(14px) saturate(1.3);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 18px;
+    box-shadow:
+        0 12px 34px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition:
+        left 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+        top 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.zone.dragging {
+    z-index: 1000;
+    transition: none;
+    border-color: rgba(255, 255, 255, 0.65);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.zone.highlight {
+    border-color: #f2c14e;
+    border-style: solid;
+    background: rgba(242, 193, 78, 0.14);
+}
+.zone-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px 4px;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+.zone.dragging .zone-header {
+    cursor: grabbing;
+}
+/* Title label "Zone Name · Count" — styled like the hand area's label. */
+.zone-label {
+    color: #8fb9a2;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Container; `display` (flex row vs grid) is set inline per the zone's layout. */
+.zone-items {
+    flex: 1;
+    gap: 6px;
+    align-content: flex-start;
+    padding: 8px;
+    /* Card height + the 8px top/bottom padding, so an empty zone is exactly as
+       tall as one holding a row of cards (border-box). */
+    min-height: calc(var(--card-h) + 16px);
+    overflow-x: auto;
+}
+.zone-empty {
+    margin: auto;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 12px;
+}
+/* Each item is a mini-pile: one card, with a count badge + shadow when stacked. */
+.zone-item {
+    position: relative;
+    width: var(--card-w);
+    height: var(--card-h);
+    cursor: grab;
+    touch-action: none;
+}
+.zone-item.stacked {
+    filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.3));
+}
+/* Marquee-selected card inside a zone — same yellow ring as a selected pile. */
+.zone-item.selected::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 10px;
+    border: 2px solid #f2c14e;
+    box-shadow: 0 0 0 2px rgba(242, 193, 78, 0.22);
+    pointer-events: none;
+    z-index: 5;
+}
+.zone-item.stacked::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translate(3px, 3px);
+    border-radius: 8px;
+    background: #c9d2dc;
+    z-index: -1;
+}
+/* The grabbed item stays in the row and sorts among the others (FLIP), lifted
+   via shadow/outline rather than transform (which the FLIP animation controls). */
+.zone-item.active {
+    z-index: 10;
+    cursor: grabbing;
+    border-radius: 8px;
+    outline: 2px solid #f2c14e;
+    outline-offset: 1px;
+    filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.5));
+}
+
+/* Floating card that follows the cursor while dragging a zone card. */
+.drag-ghost {
+    position: fixed;
+    z-index: 2000;
+    pointer-events: none;
+    transform: scale(1.05) rotate(-2deg);
+    filter: drop-shadow(6px 12px 10px rgba(0, 0, 0, 0.5));
+}

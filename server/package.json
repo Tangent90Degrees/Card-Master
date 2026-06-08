@@ -1,0 +1,19 @@
+{
+    "name": "card-master-server",
+    "version": "1.0.0",
+    "type": "module",
+    "main": "src/index.js",
+    "scripts": {
+        "dev": "node src/index.js",
+        "start": "node src/index.js",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "express": "^4.21.2",
+        "nanoid": "^5.0.9",
+        "socket.io": "^4.8.1"
+    },
+    "devDependencies": {
+        "vitest": "^2.1.8"
+    }
+}
