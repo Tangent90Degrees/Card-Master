@@ -11,7 +11,16 @@ const LIFT = 16 // how far the hovered card rises
 
 /** The current player's private hand — a frosted strip floating over the table. */
 const Hand = forwardRef(function Hand(
-    { cards, actions, activeId, highlight, onCardPointerDown },
+    {
+        cards,
+        actions,
+        activeId,
+        highlight,
+        mode = 'overlapped',
+        onToggleDisplay,
+        onSort,
+        onCardPointerDown,
+    },
     ref,
 ) {
     const disabled = cards.length < 2
@@ -21,16 +30,25 @@ const Hand = forwardRef(function Hand(
     const hoverRef = useRef(null) // currently hovered card id
     const draggingRef = useRef(false)
     draggingRef.current = !!activeId
+    const tiled = mode === 'tiled' // scroll instead of overlap when full
+    const modeRef = useRef(mode)
+    modeRef.current = mode
 
     // Recompute the overlap step so the whole row spans the width exactly — the
     // cards overlap more as more are added, and never exceed the panel.
     function measureStep() {
         const el = cardsRef.current
         if (!el) return
+        const natural = CARD_W + GAP
+        // Tiled: cards keep their natural spacing and the row scrolls when full.
+        if (modeRef.current === 'tiled') {
+            stepRef.current = natural
+            el.style.setProperty('--hand-step', `${natural}px`)
+            return
+        }
         const n = el.querySelectorAll('[data-handcard]').length
         const cs = getComputedStyle(el)
         const inner = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
-        const natural = CARD_W + GAP
         let step = natural
         if (n > 1) step = Math.max(MIN_STEP, Math.min(natural, (inner - CARD_W) / (n - 1)))
         stepRef.current = step
@@ -81,7 +99,7 @@ const Hand = forwardRef(function Hand(
         const ro = new ResizeObserver(() => measureStep())
         ro.observe(container)
         return () => ro.disconnect()
-    }, [cards])
+    }, [cards, mode])
 
     // Drop any hover fan as soon as a drag begins.
     useEffect(() => {
@@ -97,7 +115,7 @@ const Hand = forwardRef(function Hand(
     function applyFan(hoverId) {
         const el = cardsRef.current
         if (!el) return
-        if (draggingRef.current) hoverId = null
+        if (draggingRef.current || modeRef.current === 'tiled') hoverId = null
         if (hoverId === hoverRef.current) return
         hoverRef.current = hoverId
 
@@ -137,29 +155,18 @@ const Hand = forwardRef(function Hand(
             <div className="hand-bar">
                 <span className="hand-label">Your hand · {cards.length}</span>
                 <div className="hand-controls">
-                    <button
-                        disabled={disabled}
-                        onClick={() => actions.sortHand('rank')}
-                        title="Sort by rank"
-                    >
-                        Sort: Rank
+                    <button className="zone-btn" disabled={disabled} onClick={(e) => onSort?.(e)}>
+                        Sort
                     </button>
                     <button
-                        disabled={disabled}
-                        onClick={() => actions.sortHand('suit')}
-                        title="Sort by suit"
+                        className="zone-btn"
+                        onClick={onToggleDisplay}
+                        title="Toggle card display"
                     >
-                        Sort: Suit
+                        Display: {tiled ? 'Tiled' : 'Overlapped'}
                     </button>
                     <button
-                        disabled={disabled}
-                        onClick={() => actions.shuffleHand()}
-                        title="Shuffle your hand"
-                    >
-                        Shuffle
-                    </button>
-                    <button
-                        className="stand-up"
+                        className="zone-btn stand-up"
                         onClick={() => actions.leaveSeat()}
                         title="Leave your seat"
                     >
@@ -168,7 +175,7 @@ const Hand = forwardRef(function Hand(
                 </div>
             </div>
             <div
-                className="hand-cards"
+                className={`hand-cards ${tiled ? 'tiled' : ''}`}
                 ref={cardsRef}
                 onMouseOver={(e) => {
                     const card = e.target.closest('[data-handcard]')
@@ -176,9 +183,6 @@ const Hand = forwardRef(function Hand(
                 }}
                 onMouseLeave={() => applyFan(null)}
             >
-                {cards.length === 0 && (
-                    <div className="hand-empty">Drop a card here, or deal yourself in.</div>
-                )}
                 {cards.map((card) => (
                     <div
                         key={card.id}

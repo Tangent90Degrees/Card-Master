@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /**
  * A right-click menu that supports nested submenus. `items` is a flat array; each
@@ -12,11 +12,31 @@ import { useEffect } from 'react'
  * parent row), so the menu works for any nesting the callers describe.
  */
 export default function Menu({ x, y, title, items, onClose }) {
+    const ref = useRef(null)
+    const [pos, setPos] = useState({ left: x, top: y })
+    const [flip, setFlip] = useState(false)
+
     useEffect(() => {
         const onKey = (e) => e.key === 'Escape' && onClose()
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
     }, [onClose])
+
+    // Keep the menu on screen: shift it back from the right/bottom edges, and open
+    // submenus leftward when the menu sits in the right half of the window.
+    useLayoutEffect(() => {
+        const el = ref.current
+        if (!el) return
+        const pad = 8
+        const w = el.offsetWidth
+        const h = el.offsetHeight
+        let left = x
+        let top = y
+        if (left + w > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - w - pad)
+        if (top + h > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - h - pad)
+        setPos({ left, top })
+        setFlip(left + w + w > window.innerWidth)
+    }, [x, y])
 
     return (
         <>
@@ -25,14 +45,25 @@ export default function Menu({ x, y, title, items, onClose }) {
                 onPointerDown={onClose}
                 onContextMenu={(e) => e.preventDefault()}
             />
-            <MenuList style={{ left: x, top: y }} title={title} items={items} onClose={onClose} />
+            <MenuList
+                rootRef={ref}
+                style={pos}
+                flip={flip}
+                title={title}
+                items={items}
+                onClose={onClose}
+            />
         </>
     )
 }
 
-function MenuList({ style, title, items, onClose, submenu }) {
+function MenuList({ rootRef, style, flip, title, items, onClose, submenu }) {
     return (
-        <ul className={`context-menu ${submenu ? 'submenu' : ''}`} style={style}>
+        <ul
+            ref={rootRef}
+            className={`context-menu ${submenu ? 'submenu' : ''} ${flip ? 'flip-left' : ''}`}
+            style={style}
+        >
             {title && <li className="menu-label">{title}</li>}
             {items.filter(Boolean).map((item, i) => {
                 if (item.separator) return <li key={i} className="menu-divider" role="separator" />
@@ -47,7 +78,13 @@ function MenuList({ style, title, items, onClose, submenu }) {
                         <li key={i} className="menu-parent">
                             {item.label}
                             <span className="menu-arrow">›</span>
-                            <MenuList style={{}} items={item.items} onClose={onClose} submenu />
+                            <MenuList
+                                style={{}}
+                                items={item.items}
+                                onClose={onClose}
+                                submenu
+                                flip={flip}
+                            />
                         </li>
                     )
                 return (

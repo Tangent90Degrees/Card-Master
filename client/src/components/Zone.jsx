@@ -24,6 +24,9 @@ export default function Zone({
     style,
     label,
     header, // custom header node (e.g. a station's avatar + name)
+    showActions = true, // other players' areas hide the title-bar buttons
+    onSort, // opens the sort/shuffle menu from the title-bar button
+    onRemove, // delete this zone (table zones only — boards are anchored)
     onHeaderPointerDown,
     onItemPointerDown,
     onItemContextMenu,
@@ -81,9 +84,29 @@ export default function Zone({
                         {label ?? zone.name} · {zone.items.length}
                     </span>
                 )}
+                {showActions && (
+                    <div className="zone-actions">
+                        <button
+                            className="zone-btn"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => onSort?.(e, zone)}
+                        >
+                            Sort
+                        </button>
+                        {/* Boards (a player's area) are anchored and can't be removed. */}
+                        {!fixed && (
+                            <button
+                                className="zone-btn danger"
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => onRemove?.(e, zone)}
+                            >
+                                Remove
+                            </button>
+                        )}
+                    </div>
+                )}
             </div>
             <div className="zone-items" style={layoutStyle} ref={itemsRef}>
-                {items.length === 0 && <div className="zone-empty">Drop cards or piles here</div>}
                 {items.map((item) => {
                     const topCard = item.cards[item.cards.length - 1]
                     return (

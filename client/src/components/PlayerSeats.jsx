@@ -58,19 +58,22 @@ export default function PlayerSeats({ seats, players, youId, onSit }) {
                 const rel = (((i - offset) % seats) + seats) % seats
                 const { x, y } = seatPlacement(rel / seats)
                 return (
+                    // Empty seat: a full station-sized placeholder (avatar + an empty
+                    // play area) so it matches a seated player's station.
                     <div
                         key={i}
                         className="seat empty"
                         style={{ left: `${x}%`, top: `${y}%`, transform: anchorFor(x, y) }}
                     >
-                        <div className="avatar empty-avatar">{i + 1}</div>
-                        <div className="seat-info">
+                        <div className="seat-header">
+                            <div className="avatar empty-avatar">{i + 1}</div>
                             {/* Both spectators and seated players can take an empty seat —
                                 a seated player moves there (keeping their hand). */}
-                            <button className="seat-btn sit" onClick={() => onSit(i)}>
+                            <button className="zone-btn" onClick={() => onSit(i)}>
                                 {amSpectator ? 'Sit here' : 'Move here'}
                             </button>
                         </div>
+                        <div className="seat-body" />
                     </div>
                 )
             })}

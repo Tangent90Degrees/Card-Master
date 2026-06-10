@@ -4,6 +4,7 @@ import Pile from './Pile.jsx'
 import Hand from './Hand.jsx'
 import Zone from './Zone.jsx'
 import PlayerSeats, { seatPlacement, anchorFor, initials } from './PlayerSeats.jsx'
+import Menu from './Menu.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import ZoneMenu from './ZoneMenu.jsx'
 import ZoneItemMenu from './ZoneItemMenu.jsx'
@@ -15,6 +16,12 @@ export const CARD_H = 104
 const CLICK_SLOP = 5 // px of movement below which a drag counts as a click
 const MERGE_RADIUS = 64 // px proximity to drop one pile onto another
 const FLY_MS = 200 // glide a card takes from the drop point to its new container
+
+// Keep dropped cards/zones clear of the player areas around the table — the seat
+// ring (top/sides) and the hand + play areas (bottom).
+const SAFE_TOP = 96
+const SAFE_SIDE = 96
+const SAFE_BOTTOM = 188
 
 /**
  * Apply an optimistic cross-container move to a server snapshot so a dropped
@@ -78,7 +85,20 @@ export default function Game({ game }) {
     const [zoneMenu, setZoneMenu] = useState(null)
     const [itemMenu, setItemMenu] = useState(null)
     const [selMenu, setSelMenu] = useState(null)
+    const [sortMenu, setSortMenu] = useState(null) // zone sort/shuffle dropdown
     const [showSettings, setShowSettings] = useState(false)
+
+    // Local per-container card-display preference: 'tiled' (scroll when full) or
+    // 'overlapped' (cards overlap when full). Keyed by zone id, plus 'hand'. The
+    // hand defaults to overlapped, zones/boards to tiled.
+    const [displayModes, setDisplayModes] = useState({})
+    const handMode = displayModes.hand ?? 'overlapped'
+    function toggleDisplay(id, def) {
+        setDisplayModes((prev) => {
+            const cur = prev[id] ?? def
+            return { ...prev, [id]: cur === 'overlapped' ? 'tiled' : 'overlapped' }
+        })
+    }
 
     // Marquee multi-select of table piles: the set of selected pile ids, and the
     // live rubber-band rectangle (table-relative coords) while dragging one out.
@@ -468,13 +488,11 @@ export default function Game({ game }) {
         let spread = 0
         for (const m of d.members) {
             if (m.kind === 'pile') {
-                const x = Math.round(m.x + dx)
-                const y = Math.round(m.y + dy)
+                const { x, y } = clampSafe(m.x + dx, m.y + dy)
                 placements[m.id] = { x, y }
                 optPos[m.id] = { x, y }
             } else {
-                const x = baseX + spread * 26
-                const y = baseY + spread * 26
+                const { x, y } = clampSafe(baseX + spread * 26, baseY + spread * 26)
                 spread++
                 placements[m.id] = { x, y }
                 addPiles.push({ id: `opt-${m.id}`, x, y, count: m.count, cards: m.cards })
@@ -552,8 +570,10 @@ export default function Game({ game }) {
             return
         }
         // Empty table: peel the top card into a new pile where it was dropped.
-        const x = Math.round(e.clientX - table.left - d.offsetX)
-        const y = Math.round(e.clientY - table.top - d.offsetY)
+        const { x, y } = clampSafe(
+            e.clientX - table.left - d.offsetX,
+            e.clientY - table.top - d.offsetY,
+        )
         if (top) {
             setPending({
                 hide: new Set([top.id]),
@@ -680,6 +700,19 @@ export default function Game({ game }) {
         return !!r && clientY >= r.top && clientX >= r.left && clientX <= r.right
     }
 
+    // Clamp a table position (top-left of a w×h item) into the central play area so
+    // it keeps a safe margin from the seat ring and the hand / play areas.
+    function clampSafe(x, y, w = CARD_W, h = CARD_H) {
+        const t = tableRef.current
+        if (!t) return { x, y }
+        const maxX = Math.max(SAFE_SIDE, t.clientWidth - SAFE_SIDE - w)
+        const maxY = Math.max(SAFE_TOP, t.clientHeight - SAFE_BOTTOM - h)
+        return {
+            x: Math.round(Math.min(Math.max(x, SAFE_SIDE), maxX)),
+            y: Math.round(Math.min(Math.max(y, SAFE_TOP), maxY)),
+        }
+    }
+
     // Insertion index among a zone's items for a drop point, in reading order
     // (row-major) so it works for both single-row and grid layouts. Excludes the
     // item being dragged.
@@ -708,14 +741,20 @@ export default function Game({ game }) {
             id: zone.id,
             offsetX: e.clientX - rect.left,
             offsetY: e.clientY - rect.top,
+            w: rect.width,
+            h: rect.height,
         })
     }
 
     function endZoneDrag(d, e) {
         if (!d.moved) return
         const table = tableRef.current.getBoundingClientRect()
-        const x = Math.round(e.clientX - table.left - d.offsetX)
-        const y = Math.round(e.clientY - table.top - d.offsetY)
+        const { x, y } = clampSafe(
+            e.clientX - table.left - d.offsetX,
+            e.clientY - table.top - d.offsetY,
+            d.w,
+            d.h,
+        )
         setOptimisticZones((prev) => ({ ...prev, [d.id]: { x, y } }))
         actions.moveZone(d.id, x, y)
     }
@@ -835,8 +874,10 @@ export default function Game({ game }) {
             actions.zoneItemToZone(d.zoneId, d.id, t.zoneId, t.index)
         } else {
             const table = tableRef.current.getBoundingClientRect()
-            const x = Math.round(e.clientX - table.left - d.offsetX)
-            const y = Math.round(e.clientY - table.top - d.offsetY)
+            const { x, y } = clampSafe(
+                e.clientX - table.left - d.offsetX,
+                e.clientY - table.top - d.offsetY,
+            )
             if (item) {
                 setPending({
                     hide,
@@ -850,6 +891,32 @@ export default function Game({ game }) {
             }
             actions.zoneItemToTable(d.zoneId, d.id, x, y)
         }
+    }
+
+    // The sort/shuffle dropdown — shared by zones and the hand. It carries the
+    // target's sort/shuffle callbacks so the same menu drives either.
+    function openSortMenu(e, zone) {
+        e.preventDefault()
+        e.stopPropagation()
+        bringZoneToFront(zone.id)
+        const r = e.currentTarget.getBoundingClientRect()
+        setSortMenu({
+            x: r.left,
+            y: r.bottom + 4,
+            onSort: (by) => actions.sortZone(zone.id, by),
+            onShuffle: () => actions.shuffleZone(zone.id),
+        })
+    }
+    function openHandSort(e) {
+        e.preventDefault()
+        e.stopPropagation()
+        const r = e.currentTarget.getBoundingClientRect()
+        setSortMenu({
+            x: r.left,
+            y: r.bottom + 4,
+            onSort: (by) => actions.sortHand(by),
+            onShuffle: () => actions.shuffleHand(),
+        })
     }
 
     function openZoneMenu(e, zone) {
@@ -993,24 +1060,19 @@ export default function Game({ game }) {
             if (card) setPending({ hide: new Set([card.id]), addPiles: [], addZoneItems: [] })
             actions.playOnPile(d.id, t.pileId, true)
         } else if (t.type === 'table') {
+            const { x, y } = clampSafe(t.x, t.y)
             if (card) {
                 setPending({
                     hide: new Set([card.id]),
                     addPiles: [
-                        {
-                            id: `opt-${card.id}`,
-                            x: t.x,
-                            y: t.y,
-                            count: 1,
-                            cards: [cardView(card, true)],
-                        },
+                        { id: `opt-${card.id}`, x, y, count: 1, cards: [cardView(card, true)] },
                     ],
                     addZoneItems: [],
                     fromX,
                     fromY,
                 })
             }
-            actions.play(d.id, t.x, t.y, true)
+            actions.play(d.id, x, y, true)
         } else {
             setOptimisticHand(handOrderWith(d, t.index)) // hold the new order until the server confirms
             actions.reorderHand(d.id, t.index)
@@ -1248,76 +1310,96 @@ export default function Game({ game }) {
                             onItemPointerDown={(e, item) => startZoneItemDrag(e, zone.id, item)}
                             onItemContextMenu={(e, item) => openItemMenu(e, zone.id, item)}
                             onContextMenu={(e) => openZoneMenu(e, zone)}
+                            onSort={(e) => openSortMenu(e, zone)}
+                            onRemove={(e, z) => {
+                                e.stopPropagation()
+                                if (
+                                    z.items.length === 0 ||
+                                    confirm('Remove this zone? Its cards stay on the table.')
+                                )
+                                    removeZoneWithPositions(z.id)
+                            }}
                         />
                     )
                 })}
 
-                {/* Player play areas (boards): owned, anchored zones. Yours docks above
-                    the hand; everyone else's sits in front of their seat. They reuse the
-                    full zone interaction system (drop targets, item drag, menus). */}
+                {/* Your own play area docks at the bottom-right, on the hand's row. */}
                 {display.zones
-                    .filter((z) => z.ownerId)
-                    .map((board) => {
-                        const isMine = board.ownerId === state.you
-                        const owner = state.players.find((p) => p.id === board.ownerId)
-                        const common = {
-                            zone: board,
-                            items: zoneItemsFor(board),
-                            highlight: highlightZoneId === board.id,
-                            selectedIds,
-                            activeItemId: board.id === drag?.zoneId ? activeZoneItemId : null,
-                            fixed: true,
-                            onItemPointerDown: (e, item) => startZoneItemDrag(e, board.id, item),
-                            onItemContextMenu: (e, item) => openItemMenu(e, board.id, item),
-                            onContextMenu: (e) => openZoneMenu(e, board),
-                        }
-                        // Your own area docks at the bottom-right, on the hand's row.
-                        if (isMine) {
+                    .filter((z) => z.ownerId === state.you)
+                    .map((board) => (
+                        <Zone
+                            key={board.id}
+                            zone={board}
+                            items={zoneItemsFor(board)}
+                            highlight={highlightZoneId === board.id}
+                            selectedIds={selectedIds}
+                            activeItemId={board.id === drag?.zoneId ? activeZoneItemId : null}
+                            fixed
+                            className="board board-self"
+                            label="Your area"
+                            onItemPointerDown={(e, item) => startZoneItemDrag(e, board.id, item)}
+                            onItemContextMenu={(e, item) => openItemMenu(e, board.id, item)}
+                            onContextMenu={(e) => openZoneMenu(e, board)}
+                            onSort={(e) => openSortMenu(e, board)}
+                        />
+                    ))}
+
+                {/* Other players' stations — avatar + play area at their seat. Rendered
+                    in the same inset ring as the empty seats (PlayerSeats) so a seat's
+                    position doesn't shift when a player sits down. */}
+                <div className={`station-ring ${amSeated ? 'seated' : ''}`}>
+                    {display.zones
+                        .filter((z) => z.ownerId && z.ownerId !== state.you)
+                        .map((board) => {
+                            const owner = state.players.find((p) => p.id === board.ownerId)
+                            const seats = state.seats
+                            const rel =
+                                ((((owner?.seat ?? 0) - (me?.seat ?? 0)) % seats) + seats) % seats
+                            const { x, y } = seatPlacement(rel / seats)
+                            const stationHeader = (
+                                <>
+                                    <div
+                                        className="avatar"
+                                        style={{ background: owner?.color ?? '#555' }}
+                                    >
+                                        {initials(owner?.name)}
+                                    </div>
+                                    <div className="station-id">
+                                        <div className="station-name">{owner?.name}</div>
+                                        <div className="station-count">
+                                            {owner?.handCount ?? 0} 🂠
+                                        </div>
+                                    </div>
+                                </>
+                            )
                             return (
                                 <Zone
                                     key={board.id}
-                                    {...common}
-                                    className="board board-self"
-                                    label="Your area"
+                                    zone={board}
+                                    items={zoneItemsFor(board)}
+                                    highlight={highlightZoneId === board.id}
+                                    selectedIds={selectedIds}
+                                    activeItemId={
+                                        board.id === drag?.zoneId ? activeZoneItemId : null
+                                    }
+                                    fixed
+                                    className={`board board-station ${owner && !owner.connected ? 'offline' : ''}`}
+                                    style={{
+                                        left: `${x}%`,
+                                        top: `${y}%`,
+                                        transform: anchorFor(x, y),
+                                    }}
+                                    header={stationHeader}
+                                    showActions={false}
+                                    onItemPointerDown={(e, item) =>
+                                        startZoneItemDrag(e, board.id, item)
+                                    }
+                                    onItemContextMenu={(e, item) => openItemMenu(e, board.id, item)}
+                                    onContextMenu={(e) => openZoneMenu(e, board)}
                                 />
                             )
-                        }
-                        // Another player: a full "station" — avatar + ID header above
-                        // their play area, all in one rounded rectangle, at their seat.
-                        const seats = state.seats
-                        const rel =
-                            ((((owner?.seat ?? 0) - (me?.seat ?? 0)) % seats) + seats) % seats
-                        const { x, y } = seatPlacement(rel / seats)
-                        // Keep stations off the screen edge with a small margin.
-                        const M = 16
-                        const leftCss =
-                            x <= 0 ? `${M}px` : x >= 100 ? `calc(100% - ${M}px)` : `${x}%`
-                        const topCss =
-                            y <= 0 ? `${M}px` : y >= 100 ? `calc(100% - ${M}px)` : `${y}%`
-                        const stationHeader = (
-                            <>
-                                <div
-                                    className="avatar"
-                                    style={{ background: owner?.color ?? '#555' }}
-                                >
-                                    {initials(owner?.name)}
-                                </div>
-                                <div className="station-id">
-                                    <div className="station-name">{owner?.name}</div>
-                                    <div className="station-count">{owner?.handCount ?? 0} 🂠</div>
-                                </div>
-                            </>
-                        )
-                        return (
-                            <Zone
-                                key={board.id}
-                                {...common}
-                                className={`board board-station ${owner && !owner.connected ? 'offline' : ''}`}
-                                style={{ left: leftCss, top: topCss, transform: anchorFor(x, y) }}
-                                header={stationHeader}
-                            />
-                        )
-                    })}
+                        })}
+                </div>
 
                 {orderedPiles.map((pile) => {
                     const optimistic = optimisticPiles[pile.id]
@@ -1425,6 +1507,9 @@ export default function Game({ game }) {
                     actions={actions}
                     activeId={activeId}
                     highlight={handHighlight}
+                    mode={handMode}
+                    onToggleDisplay={() => toggleDisplay('hand', 'overlapped')}
+                    onSort={openHandSort}
                     onCardPointerDown={startHandDrag}
                 />
             )}
@@ -1458,12 +1543,7 @@ export default function Game({ game }) {
 
             {menu && <ContextMenu menu={menu} actions={actions} onClose={() => setMenu(null)} />}
             {zoneMenu && (
-                <ZoneMenu
-                    menu={zoneMenu}
-                    actions={actions}
-                    onRemove={() => removeZoneWithPositions(zoneMenu.zoneId)}
-                    onClose={() => setZoneMenu(null)}
-                />
+                <ZoneMenu menu={zoneMenu} actions={actions} onClose={() => setZoneMenu(null)} />
             )}
             {itemMenu && (
                 <ZoneItemMenu menu={itemMenu} actions={actions} onClose={() => setItemMenu(null)} />
@@ -1474,6 +1554,19 @@ export default function Game({ game }) {
                     actions={actions}
                     onClear={() => setSelectedIds(new Set())}
                     onClose={() => setSelMenu(null)}
+                />
+            )}
+            {sortMenu && (
+                <Menu
+                    x={sortMenu.x}
+                    y={sortMenu.y}
+                    items={[
+                        { label: 'By rank', onClick: () => sortMenu.onSort('rank') },
+                        { label: 'By suit', onClick: () => sortMenu.onSort('suit') },
+                        { separator: true },
+                        { label: 'Shuffle', onClick: () => sortMenu.onShuffle() },
+                    ]}
+                    onClose={() => setSortMenu(null)}
                 />
             )}
             {showSettings && (

@@ -140,8 +140,7 @@ export function useGame() {
                 socket.emit('pieces:toZone', { ids, zoneId, index }),
             piecesToHand: (ids) => socket.emit('pieces:toHand', { ids }),
             flipPieces: (ids, mode = 'top') => socket.emit('pieces:flip', { ids, mode }),
-            piecesToTable: (ids, placements) =>
-                socket.emit('pieces:toTable', { ids, placements }),
+            piecesToTable: (ids, placements) => socket.emit('pieces:toTable', { ids, placements }),
             collectToHand: (pileIds) => socket.emit('pile:collectToHand', { pileIds }),
             pickup: (pileId, count = 1) => socket.emit('card:pickup', { pileId, count }),
             play: (cardId, x, y, faceUp = true) =>
