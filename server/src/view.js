@@ -24,6 +24,7 @@ export function serializeFor(room, viewerId) {
     for (const zone of room.zones.values()) {
         zones.push({
             id: zone.id,
+            ownerId: zone.ownerId ?? null,
             x: zone.x,
             y: zone.y,
             name: zone.name,

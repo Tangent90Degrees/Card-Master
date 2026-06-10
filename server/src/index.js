@@ -34,7 +34,9 @@ if (isProd) {
     const vite = await createViteServer({
         root: clientRoot,
         appType: 'spa',
-        server: { middlewareMode: true, hmr: { server } },
+        // allowedHosts: true — dev is reached through a VM/proxy hostname, not just
+        // localhost, and Vite otherwise blocks requests with an unknown Host header.
+        server: { middlewareMode: true, hmr: { server }, allowedHosts: true },
     })
     app.use(vite.middlewares)
 }

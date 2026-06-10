@@ -3,7 +3,7 @@ import Card from './Card.jsx'
 import Pile from './Pile.jsx'
 import Hand from './Hand.jsx'
 import Zone from './Zone.jsx'
-import PlayerSeats from './PlayerSeats.jsx'
+import PlayerSeats, { seatPlacement, anchorFor, initials } from './PlayerSeats.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import ZoneMenu from './ZoneMenu.jsx'
 import ZoneItemMenu from './ZoneItemMenu.jsx'
@@ -125,6 +125,28 @@ export default function Game({ game }) {
             const rest = prev.filter((id) => !move.has(id))
             const moved = list.filter((id) => prev.includes(id))
             return [...rest, ...moved]
+        })
+    }
+
+    // Same stacking order for table zones — the last clicked / operated zone is
+    // rendered on top of overlapping ones (boards are anchored, so excluded).
+    const [zoneOrder, setZoneOrder] = useState([])
+    useEffect(() => {
+        setZoneOrder((prev) => {
+            const liveIds = state.zones.filter((z) => !z.ownerId).map((z) => z.id)
+            const liveSet = new Set(liveIds)
+            const kept = prev.filter((id) => liveSet.has(id))
+            const keptSet = new Set(kept)
+            const added = liveIds.filter((id) => !keptSet.has(id))
+            const next = [...kept, ...added]
+            if (next.length === prev.length && next.every((id, i) => id === prev[i])) return prev
+            return next
+        })
+    }, [state.zones])
+    function bringZoneToFront(zoneId) {
+        setZoneOrder((prev) => {
+            if (!prev.includes(zoneId)) return prev // not a table zone (e.g. a board)
+            return [...prev.filter((id) => id !== zoneId), zoneId]
         })
     }
 
@@ -396,9 +418,9 @@ export default function Game({ game }) {
         // snapshot. Emitting per-member would let the first broadcast clear the
         // optimistic state while the rest are still in flight — that's the blink.
 
-        // → hand: pull every member's cards into my hand.
-        const handRect = handRef.current?.getBoundingClientRect()
-        if (handRect && e.clientY >= handRect.top) {
+        // → hand: pull every member's cards into my hand (only when over the hand
+        // panel itself, not the play area beside it).
+        if (overHand(e.clientX, e.clientY)) {
             const hide = new Set()
             for (const m of d.members) for (const c of m.cards) hide.add(c.id)
             setPending({ hide, addPiles: [], addZoneItems: [] })
@@ -423,6 +445,7 @@ export default function Game({ game }) {
                 }
             })
             setPending({ hide, addPiles: [], addZoneItems, fromX, fromY })
+            bringZoneToFront(zone.id)
             actions.piecesToZone(
                 moving.map((m) => m.id),
                 zone.id,
@@ -481,8 +504,7 @@ export default function Game({ game }) {
         const fromX = e.clientX - d.offsetX
         const fromY = e.clientY - d.offsetY
 
-        const hand = handRef.current?.getBoundingClientRect()
-        if (hand && e.clientY >= hand.top) {
+        if (overHand(e.clientX, e.clientY)) {
             if (top) setPending({ hide: new Set([top.id]), addPiles: [], addZoneItems: [] })
             actions.pickup(d.id, 1) // draw the top card into your hand
             return
@@ -505,6 +527,7 @@ export default function Game({ game }) {
                     fromY,
                 })
             }
+            bringZoneToFront(zone.id)
             actions.topToZone(d.id, zone.id, index)
             return
         }
@@ -649,6 +672,14 @@ export default function Game({ game }) {
         return found
     }
 
+    // True only when the cursor is over the hand panel itself. The hand now shares
+    // the bottom row with your play area, so a Y-only check would wrongly treat the
+    // play area (beside it) as the hand — we check the hand's X extent too.
+    function overHand(clientX, clientY) {
+        const r = handRef.current?.getBoundingClientRect()
+        return !!r && clientY >= r.top && clientX >= r.left && clientX <= r.right
+    }
+
     // Insertion index among a zone's items for a drop point, in reading order
     // (row-major) so it works for both single-row and grid layouts. Excludes the
     // item being dragged.
@@ -670,6 +701,7 @@ export default function Game({ game }) {
         if (e.button === 2) return
         setMenu(null)
         setZoneMenu(null)
+        bringZoneToFront(zone.id)
         const rect = e.currentTarget.parentElement.getBoundingClientRect() // the .zone box
         beginDrag(e, {
             kind: 'zone',
@@ -692,6 +724,7 @@ export default function Game({ game }) {
         if (e.button === 2) return
         e.stopPropagation()
         setItemMenu(null)
+        bringZoneToFront(zoneId)
         const el = e.currentTarget
         const rect = el.getBoundingClientRect()
         // A selected item drags the whole selection; grabbing an unselected one
@@ -738,8 +771,9 @@ export default function Game({ game }) {
     // Where a dragged zone item would land: own hand, reorder in place, another
     // zone, or out onto the table.
     function computeZoneItemTarget(d, clientX, clientY) {
-        const hand = handRef.current?.getBoundingClientRect()
-        if (hand && clientY >= hand.top) return { type: 'hand' }
+        // A zone (your play area, a station, or a table zone) wins wherever the
+        // cursor is over it — so reordering within / dropping into the play area
+        // isn't mistaken for the hand, which sits on the same row.
         const zone = zoneAtPoint(clientX, clientY)
         if (zone) {
             if (zone.id === d.zoneId)
@@ -750,6 +784,7 @@ export default function Game({ game }) {
                 index: zoneInsertIndex(zone.el, clientX, clientY, d.id),
             }
         }
+        if (overHand(clientX, clientY)) return { type: 'hand' }
         return { type: 'table' }
     }
 
@@ -796,6 +831,7 @@ export default function Game({ game }) {
                     fromY,
                 })
             }
+            bringZoneToFront(t.zoneId)
             actions.zoneItemToZone(d.zoneId, d.id, t.zoneId, t.index)
         } else {
             const table = tableRef.current.getBoundingClientRect()
@@ -820,6 +856,7 @@ export default function Game({ game }) {
         e.preventDefault()
         e.stopPropagation()
         setItemMenu(null)
+        bringZoneToFront(zone.id)
         setZoneMenu({
             zoneId: zone.id,
             x: e.clientX,
@@ -828,6 +865,7 @@ export default function Game({ game }) {
             name: zone.name,
             layout: zone.layout,
             perRow: zone.perRow,
+            fixed: !!zone.ownerId, // a board has no rename/remove
         })
     }
 
@@ -841,6 +879,7 @@ export default function Game({ game }) {
             return
         }
         setZoneMenu(null)
+        bringZoneToFront(zoneId)
         setItemMenu({ zoneId, itemId: item.id, x: e.clientX, y: e.clientY, count: item.count })
     }
 
@@ -888,20 +927,22 @@ export default function Game({ game }) {
     // the open table plays it there, otherwise an insertion index in the hand.
     function computeHandTarget(d, clientX, clientY) {
         const hand = handRef.current.getBoundingClientRect()
-        if (clientY < hand.top) {
-            const table = tableRef.current.getBoundingClientRect()
-            const x = clientX - table.left - d.offsetX
-            const y = clientY - table.top - d.offsetY
-            const zone = zoneAtPoint(clientX, clientY)
-            if (zone) {
-                return {
-                    type: 'zone',
-                    zoneId: zone.id,
-                    index: zoneInsertIndex(zone.el, clientX, clientY),
-                    x,
-                    y,
-                }
+        const table = tableRef.current.getBoundingClientRect()
+        const x = clientX - table.left - d.offsetX
+        const y = clientY - table.top - d.offsetY
+        // A zone (table zone OR your play area, which sits beside the hand on the
+        // same row) takes priority wherever the cursor is over it.
+        const zone = zoneAtPoint(clientX, clientY)
+        if (zone) {
+            return {
+                type: 'zone',
+                zoneId: zone.id,
+                index: zoneInsertIndex(zone.el, clientX, clientY),
+                x,
+                y,
             }
+        }
+        if (clientY < hand.top) {
             const pile = pileAtPoint(clientX, clientY)
             if (pile) return { type: 'pile', pileId: pile.id, x, y }
             return { type: 'table', x, y }
@@ -945,6 +986,7 @@ export default function Game({ game }) {
                     fromY,
                 })
             }
+            bringZoneToFront(t.zoneId)
             actions.handCardToZone(d.id, t.zoneId, t.index)
         } else if (t.type === 'pile') {
             // Dropped over an existing pile → add the card on top of it.
@@ -994,7 +1036,7 @@ export default function Game({ game }) {
     // grabbed card is spliced live into the order so it sorts among the others.
     // While dragging up to the table, it's pulled out and a table preview is shown.
     const handTarget =
-        drag?.kind === 'hand' && tableRef.current && handRef.current
+        drag?.kind === 'hand' && drag.moved && tableRef.current && handRef.current
             ? computeHandTarget(drag, drag.clientX, drag.clientY)
             : null
 
@@ -1022,8 +1064,9 @@ export default function Game({ game }) {
     const spectatorCount = state.players.filter((p) => p.seat === null).length
 
     // An unselected pile drag carries only the TOP card: a floating carry card
-    // follows the cursor while the rest of the pile stays at rest.
-    const topDrag = drag?.kind === 'pile' ? drag : null
+    // follows the cursor while the rest of the pile stays at rest. Only once the
+    // pointer actually moves — a click (no move) just flips the card in place.
+    const topDrag = drag?.kind === 'pile' && drag.moved ? drag : null
     let topDragCard = null
     if (topDrag) {
         const src = state.piles.find((p) => p.id === topDrag.id)
@@ -1033,7 +1076,9 @@ export default function Game({ game }) {
     // A group drag with no table piles (pure zone-card selection) has nothing that
     // visibly moves, so show a floating ghost of the grabbed card + a count badge.
     const groupGhost =
-        drag?.kind === 'group' && !drag.members.some((m) => m.kind === 'pile') ? drag : null
+        drag?.kind === 'group' && drag.moved && !drag.members.some((m) => m.kind === 'pile')
+            ? drag
+            : null
     const groupGhostCard = groupGhost
         ? groupGhost.members.find((m) => m.id === groupGhost.id)?.cards.at(-1)
         : null
@@ -1045,11 +1090,11 @@ export default function Game({ game }) {
     let activeZoneItemId = null
     let zoneGhost = false
     let highlightZoneId =
-        (drag?.kind === 'pile' || drag?.kind === 'group') && tableRef.current
+        (drag?.kind === 'pile' || drag?.kind === 'group') && drag.moved && tableRef.current
             ? (zoneAtPoint(drag.clientX, drag.clientY)?.id ?? null)
             : null
     if (drag?.kind === 'hand' && handTarget?.type === 'zone') highlightZoneId = handTarget.zoneId
-    if (drag?.kind === 'zoneitem' && tableRef.current) {
+    if (drag?.kind === 'zoneitem' && drag.moved && tableRef.current) {
         const t = computeZoneItemTarget(drag, drag.clientX, drag.clientY)
         if (t.type === 'reorder') {
             zoneItemsOverride = { zoneId: drag.zoneId, items: zoneItemsWith(drag, t.index) }
@@ -1076,9 +1121,10 @@ export default function Game({ game }) {
     let highlightPileId = null
     if (drag?.kind === 'hand' && handTarget?.type === 'pile') highlightPileId = handTarget.pileId
     if (topDrag && tableRef.current) {
-        const hb = handRef.current?.getBoundingClientRect()
-        const overHand = hb && topDrag.clientY >= hb.top
-        if (!overHand && !zoneAtPoint(topDrag.clientX, topDrag.clientY)) {
+        if (
+            !overHand(topDrag.clientX, topDrag.clientY) &&
+            !zoneAtPoint(topDrag.clientX, topDrag.clientY)
+        ) {
             const np = nearestPile(
                 topDrag.id,
                 topDrag.clientX,
@@ -1091,11 +1137,9 @@ export default function Game({ game }) {
 
     // Light up the hand panel when a card/pile/selection being dragged is hovering
     // over it (so a drop there reads clearly), the same way zones highlight.
-    const handRect = handRef.current?.getBoundingClientRect()
     const handHighlight =
-        !!handRect &&
         !!drag &&
-        drag.clientY >= handRect.top &&
+        overHand(drag.clientX, drag.clientY) &&
         (drag.kind === 'pile' || drag.kind === 'group' || drag.kind === 'zoneitem')
 
     // Render piles in stacking order so the most-recently-operated one is on top.
@@ -1104,6 +1148,11 @@ export default function Game({ game }) {
     const orderedPiles = [...display.piles].sort(
         (a, b) => (zRank.get(a.id) ?? Infinity) - (zRank.get(b.id) ?? Infinity),
     )
+    // Table zones in stacking order — last operated on top.
+    const zoneRank = new Map(zoneOrder.map((id, i) => [id, i]))
+    const orderedTableZones = display.zones
+        .filter((z) => !z.ownerId)
+        .sort((a, b) => (zoneRank.get(a.id) ?? Infinity) - (zoneRank.get(b.id) ?? Infinity))
 
     return (
         <div className="game">
@@ -1172,10 +1221,9 @@ export default function Game({ game }) {
                     players={state.players}
                     youId={state.you}
                     onSit={(seatIndex) => actions.takeSeat(seatIndex)}
-                    onLeave={actions.leaveSeat}
                 />
 
-                {display.zones.map((zone) => {
+                {orderedTableZones.map((zone) => {
                     const opt = optimisticZones[zone.id]
                     let left = opt ? opt.x : zone.x
                     let top = opt ? opt.y : zone.y
@@ -1203,6 +1251,73 @@ export default function Game({ game }) {
                         />
                     )
                 })}
+
+                {/* Player play areas (boards): owned, anchored zones. Yours docks above
+                    the hand; everyone else's sits in front of their seat. They reuse the
+                    full zone interaction system (drop targets, item drag, menus). */}
+                {display.zones
+                    .filter((z) => z.ownerId)
+                    .map((board) => {
+                        const isMine = board.ownerId === state.you
+                        const owner = state.players.find((p) => p.id === board.ownerId)
+                        const common = {
+                            zone: board,
+                            items: zoneItemsFor(board),
+                            highlight: highlightZoneId === board.id,
+                            selectedIds,
+                            activeItemId: board.id === drag?.zoneId ? activeZoneItemId : null,
+                            fixed: true,
+                            onItemPointerDown: (e, item) => startZoneItemDrag(e, board.id, item),
+                            onItemContextMenu: (e, item) => openItemMenu(e, board.id, item),
+                            onContextMenu: (e) => openZoneMenu(e, board),
+                        }
+                        // Your own area docks at the bottom-right, on the hand's row.
+                        if (isMine) {
+                            return (
+                                <Zone
+                                    key={board.id}
+                                    {...common}
+                                    className="board board-self"
+                                    label="Your area"
+                                />
+                            )
+                        }
+                        // Another player: a full "station" — avatar + ID header above
+                        // their play area, all in one rounded rectangle, at their seat.
+                        const seats = state.seats
+                        const rel =
+                            ((((owner?.seat ?? 0) - (me?.seat ?? 0)) % seats) + seats) % seats
+                        const { x, y } = seatPlacement(rel / seats)
+                        // Keep stations off the screen edge with a small margin.
+                        const M = 16
+                        const leftCss =
+                            x <= 0 ? `${M}px` : x >= 100 ? `calc(100% - ${M}px)` : `${x}%`
+                        const topCss =
+                            y <= 0 ? `${M}px` : y >= 100 ? `calc(100% - ${M}px)` : `${y}%`
+                        const stationHeader = (
+                            <>
+                                <div
+                                    className="avatar"
+                                    style={{ background: owner?.color ?? '#555' }}
+                                >
+                                    {initials(owner?.name)}
+                                </div>
+                                <div className="station-id">
+                                    <div className="station-name">{owner?.name}</div>
+                                    <div className="station-count">{owner?.handCount ?? 0} 🂠</div>
+                                </div>
+                            </>
+                        )
+                        return (
+                            <Zone
+                                key={board.id}
+                                {...common}
+                                className={`board board-station ${owner && !owner.connected ? 'offline' : ''}`}
+                                style={{ left: leftCss, top: topCss, transform: anchorFor(x, y) }}
+                                header={stationHeader}
+                            />
+                        )
+                    })}
 
                 {orderedPiles.map((pile) => {
                     const optimistic = optimisticPiles[pile.id]
@@ -1233,9 +1348,10 @@ export default function Game({ game }) {
                     const topCard = pile.cards[pile.cards.length - 1]
                     let left = optimistic ? optimistic.x : pile.x
                     let top = optimistic ? optimistic.y : pile.y
-                    // Group (selection) drag: every selected table pile rides the same delta.
+                    // Group (selection) drag: every selected table pile rides the same
+                    // delta — but only once moved, so a click just flips in place.
                     const groupBase =
-                        drag?.kind === 'group'
+                        drag?.kind === 'group' && drag.moved
                             ? drag.members.find((m) => m.kind === 'pile' && m.id === pile.id)
                             : null
                     const dragging = !!groupBase

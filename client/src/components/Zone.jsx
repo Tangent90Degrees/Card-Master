@@ -19,6 +19,11 @@ export default function Zone({
     highlight,
     selectedIds,
     activeItemId,
+    fixed, // a player's board: anchored, header isn't a drag handle
+    className,
+    style,
+    label,
+    header, // custom header node (e.g. a station's avatar + name)
     onHeaderPointerDown,
     onItemPointerDown,
     onItemContextMenu,
@@ -65,15 +70,17 @@ export default function Zone({
 
     return (
         <div
-            className={`zone ${dragging ? 'dragging' : ''} ${highlight ? 'highlight' : ''}`}
+            className={`zone ${dragging ? 'dragging' : ''} ${highlight ? 'highlight' : ''} ${className || ''}`}
             data-zone={zone.id}
-            style={{ left, top }}
+            style={{ left, top, ...style }}
             onContextMenu={onContextMenu}
         >
-            <div className="zone-header" onPointerDown={onHeaderPointerDown}>
-                <span className="zone-label">
-                    {zone.name} · {zone.items.length}
-                </span>
+            <div className="zone-header" onPointerDown={fixed ? undefined : onHeaderPointerDown}>
+                {header ?? (
+                    <span className="zone-label">
+                        {label ?? zone.name} · {zone.items.length}
+                    </span>
+                )}
             </div>
             <div className="zone-items" style={layoutStyle} ref={itemsRef}>
                 {items.length === 0 && <div className="zone-empty">Drop cards or piles here</div>}

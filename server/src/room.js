@@ -111,6 +111,7 @@ export class Room {
         if (!p || !(idx >= 0 && idx < this.seats)) return false
         if (this.players.some((other) => other.seat === idx)) return false // seat taken
         p.seat = idx
+        this.ensureBoard(playerId) // a seated player gets a play area
         return true
     }
 
@@ -120,6 +121,7 @@ export class Room {
         if (!p || p.seat === null) return false
         p.seat = null
         this.returnHandToTable(playerId)
+        this.removeBoard(playerId)
         return true
     }
 
@@ -130,6 +132,7 @@ export class Room {
             if (p.seat !== null && p.seat >= this.seats) {
                 p.seat = null
                 this.returnHandToTable(p.id)
+                this.removeBoard(p.id)
             }
         }
         return true
@@ -140,6 +143,7 @@ export class Room {
         const idx = this.players.findIndex((p) => p.id === playerId)
         if (idx === -1) return
         this.returnHandToTable(playerId)
+        this.removeBoard(playerId)
         this.hands.delete(playerId)
         this.players.splice(idx, 1)
     }
@@ -447,6 +451,7 @@ export class Room {
     createZone(x, y) {
         const zone = {
             id: nanoid(8),
+            ownerId: null, // table zone (a player's board sets this — see ensureBoard)
             x: clampCoord(x),
             y: clampCoord(y),
             name: 'Zone',
@@ -456,6 +461,41 @@ export class Room {
         }
         this.zones.set(zone.id, zone)
         return zone
+    }
+
+    // ---- player play areas (boards) --------------------------------------
+    // A board is each seated player's personal play area: an OWNED zone that
+    // behaves exactly like a table zone (same item interactions, visible to all)
+    // but is anchored — it can't be moved, removed or renamed by anyone.
+
+    findBoard(playerId) {
+        for (const z of this.zones.values()) if (z.ownerId === playerId) return z
+        return null
+    }
+
+    /** Give a seated player a play area if they don't already have one. */
+    ensureBoard(playerId) {
+        if (this.findBoard(playerId)) return
+        const p = this.getPlayer(playerId)
+        const zone = {
+            id: nanoid(8),
+            ownerId: playerId,
+            x: 0,
+            y: 0,
+            name: p ? p.name : 'Play area',
+            layout: 'row',
+            perRow: 6,
+            items: [],
+        }
+        this.zones.set(zone.id, zone)
+    }
+
+    /** Remove a player's board, leaving its cards on the table as piles. */
+    removeBoard(playerId) {
+        const zone = this.findBoard(playerId)
+        if (!zone) return
+        zone.items.forEach((item, i) => this.addPile(160 + i * 24, 160 + i * 24, item.cardIds))
+        this.zones.delete(zone.id)
     }
 
     findZoneItem(zone, itemId) {
@@ -469,7 +509,7 @@ export class Room {
      */
     removeZone(zoneId, positions) {
         const zone = this.zones.get(zoneId)
-        if (!zone) return false
+        if (!zone || zone.ownerId) return false // boards can't be removed
         for (const item of zone.items) {
             const pos = positions && positions[item.id]
             this.addPile(pos ? pos.x : zone.x, pos ? pos.y : zone.y, item.cardIds)
@@ -480,7 +520,7 @@ export class Room {
 
     moveZone(zoneId, x, y) {
         const zone = this.zones.get(zoneId)
-        if (!zone) return false
+        if (!zone || zone.ownerId) return false // boards are anchored
         zone.x = clampCoord(x)
         zone.y = clampCoord(y)
         return true
@@ -488,7 +528,7 @@ export class Room {
 
     renameZone(zoneId, name) {
         const zone = this.zones.get(zoneId)
-        if (!zone) return false
+        if (!zone || zone.ownerId) return false // a board is named after its owner
         zone.name = String(name ?? '').slice(0, 30) || 'Zone'
         return true
     }
@@ -809,8 +849,9 @@ export class Room {
 
     /** Gather every card back into a single shuffled, face-down deck. */
     reset() {
-        this.seed()
+        this.seed() // clears piles + zones (boards included)
         for (const id of this.hands.keys()) this.hands.set(id, [])
+        for (const p of this.players) if (p.seat !== null) this.ensureBoard(p.id) // fresh empty boards
         return true
     }
 }

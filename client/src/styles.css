@@ -351,20 +351,47 @@ body {
 /* ---------- Player seats (around the table edges) ---------- */
 .seats {
     position: absolute;
-    inset: 0;
+    /* The seat field: left/right match the hand's 16px frame. Spectating, it uses
+       the whole table; once seated (.seated) the bottom lifts above the hand area
+       so seats leave room for it and never overlap. */
+    left: 16px;
+    right: 16px;
+    top: 8px;
+    bottom: 8px;
     pointer-events: none; /* never block dragging cards underneath */
     z-index: 2;
 }
+.seats.seated {
+    bottom: 184px;
+}
 .seat {
     position: absolute;
-    transform: translate(-50%, -50%);
+    /* transform (corner/edge anchor) is set inline per seat in PlayerSeats.jsx */
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 8px;
-    max-width: 170px;
+    gap: 10px;
+    /* Fixed width so every seat is the same size regardless of which edge it sits
+       on — otherwise a right-anchored seat shrinks to its minimum and wraps text. */
+    width: 176px;
+    box-sizing: border-box;
+    /* Frosted glass rounded rectangle, matching the hand panel. */
+    padding: 8px 12px;
+    border-radius: 16px;
+    background: rgba(11, 28, 20, 0.5);
+    backdrop-filter: blur(14px) saturate(1.3);
+    -webkit-backdrop-filter: blur(14px) saturate(1.3);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow:
+        0 12px 34px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
     color: #e8f5ee;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+/* Empty slots read as lighter, open placeholders. */
+.seat.empty {
+    background: rgba(11, 28, 20, 0.28);
+    border-style: dashed;
+    box-shadow: none;
 }
 .seat-info {
     display: flex;
@@ -379,6 +406,7 @@ body {
 .avatar {
     width: 46px;
     height: 46px;
+    flex-shrink: 0; /* keep the circle round inside the fixed-width seat */
     border-radius: 50%;
     display: grid;
     place-items: center;
@@ -450,12 +478,18 @@ body {
 /* A rounded panel floating above the felt with a frosted-glass effect. */
 .hand {
     position: absolute;
+    display: flex;
+    flex-direction: column;
     left: 16px;
-    right: 16px;
-    bottom: 14px;
+    /* Leave room on the right for your play area (.board-self) on the same row,
+       with a uniform 16px gap matching the outer margins. */
+    right: calc(34% + 32px);
+    bottom: 16px;
     z-index: 50;
-    min-height: 132px;
-    padding: 10px 16px 14px;
+    height: 160px;
+    /* Inner padding lives on the bar + cards (like a zone's header + items) so the
+       hand and your play area share the same internal spacing. */
+    padding: 0;
     border-radius: 18px;
     background: rgba(11, 28, 20, 0.5);
     backdrop-filter: blur(14px) saturate(1.3);
@@ -477,8 +511,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 6px;
     gap: 12px;
+    padding: 10px 14px 4px; /* matches .zone-header */
 }
 .hand-label {
     color: #8fb9a2;
@@ -505,15 +539,27 @@ body {
     opacity: 0.4;
     cursor: not-allowed;
 }
+/* Leave-seat action, set apart from the card controls. */
+.hand-controls .stand-up {
+    margin-left: 10px;
+    border-color: #6b3a3a;
+    background: #3a1e1e;
+    color: #efd6d6;
+}
+.hand-controls .stand-up:hover {
+    background: #4a2626;
+}
 /* A single row. Cards step by --hand-step (set in JS to fit the width); when
    that's narrower than a card they overlap instead of wrapping. */
 .hand-cards {
     position: relative;
+    flex: 1;
     display: flex;
     flex-wrap: nowrap;
     justify-content: flex-start;
     align-items: flex-end;
     min-height: var(--card-h);
+    padding: 8px; /* matches .zone-items */
 }
 .hand-empty {
     color: #5d7a6b;
@@ -873,6 +919,62 @@ body {
     outline: 2px solid #f2c14e;
     outline-offset: 1px;
     filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.5));
+}
+
+/* ---------- Player play areas (boards) ---------- */
+/* Boards reuse the frosted .zone look; an owner-accent border sets them apart
+   from table zones, and their header isn't a drag handle. */
+.zone.board {
+    z-index: 3;
+    border-color: rgba(242, 193, 78, 0.45);
+}
+.zone.board .zone-header {
+    cursor: default;
+}
+.zone.board .zone-label {
+    color: #f0d590;
+}
+/* Your own play area: docked on the hand's row, to its right, same height. */
+.zone.board-self {
+    left: auto;
+    right: 16px;
+    bottom: 16px;
+    top: auto;
+    width: 34%;
+    max-width: 34%;
+    height: 160px;
+}
+/* Another player's station: avatar + ID header above their play area, all in one
+   rounded rectangle, anchored in front of their seat. */
+.zone.board-station {
+    width: 220px;
+    max-width: 220px;
+}
+.zone.board-station.offline {
+    opacity: 0.5;
+}
+.zone.board-station .zone-header {
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px 6px;
+}
+.station-id {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.station-name {
+    font-weight: 700;
+    font-size: 13px;
+    color: #e8f5ee;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.station-count {
+    font-size: 11px;
+    color: #cdeadb;
 }
 
 /* Floating card that follows the cursor while dragging a zone card. */

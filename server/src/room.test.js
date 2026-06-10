@@ -303,6 +303,54 @@ describe('batch selection operations', () => {
     })
 })
 
+describe('player boards (play areas)', () => {
+    function seatedRoom() {
+        const room = new Room('BRD1', { decks: 1, jokers: 0 })
+        const a = room.addPlayer('A')
+        room.takeSeat(a.id, 0)
+        return { room, a }
+    }
+
+    it('sitting down creates an owned, anchored board', () => {
+        const { room, a } = seatedRoom()
+        const board = room.findBoard(a.id)
+        expect(board).toBeTruthy()
+        expect(board.ownerId).toBe(a.id)
+        // anchored: can't be moved, renamed or removed
+        expect(room.moveZone(board.id, 10, 10)).toBe(false)
+        expect(room.renameZone(board.id, 'x')).toBe(false)
+        expect(room.removeZone(board.id, {})).toBe(false)
+    })
+
+    it('standing up removes the board, leaving its cards on the table', () => {
+        const { room, a } = seatedRoom()
+        const board = room.findBoard(a.id)
+        const deckId = [...room.piles.keys()][0]
+        const top = room.split(deckId, 2, 50, 50) && [...room.piles.values()].at(-1)
+        room.pileToZone(top.id, board.id, 0)
+        expect(board.items).toHaveLength(1)
+        const pilesBefore = room.piles.size
+
+        room.leaveSeat(a.id)
+        expect(room.findBoard(a.id)).toBe(null)
+        expect(room.piles.size).toBe(pilesBefore + 1) // the board's item became a table pile
+    })
+
+    it('reset gives seated players a fresh empty board', () => {
+        const { room, a } = seatedRoom()
+        const board = room.findBoard(a.id)
+        const deckId = [...room.piles.keys()][0]
+        const top = room.split(deckId, 1, 60, 60) && [...room.piles.values()].at(-1)
+        room.pileToZone(top.id, board.id, 0)
+        expect(room.findBoard(a.id).items).toHaveLength(1)
+
+        room.reset()
+        const fresh = room.findBoard(a.id)
+        expect(fresh).toBeTruthy()
+        expect(fresh.items).toHaveLength(0)
+    })
+})
+
 describe('seating', () => {
     function room2() {
         const room = new Room('SEAT1', { decks: 1, jokers: 0 })

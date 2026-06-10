@@ -158,6 +158,13 @@ const Hand = forwardRef(function Hand(
                     >
                         Shuffle
                     </button>
+                    <button
+                        className="stand-up"
+                        onClick={() => actions.leaveSeat()}
+                        title="Leave your seat"
+                    >
+                        Stand up
+                    </button>
                 </div>
             </div>
             <div

@@ -40,9 +40,11 @@ export default function ZoneMenu({ menu, actions, onRemove, onClose }) {
             ],
         },
         multi && { label: 'Shuffle', onClick: () => actions.shuffleZone(id) },
-        { separator: true },
-        { label: 'Rename…', onClick: rename },
-        { label: 'Remove zone', onClick: remove },
+        // A board (owned play area) is anchored and named after its owner, so it
+        // can't be renamed or removed.
+        !menu.fixed && { separator: true },
+        !menu.fixed && { label: 'Rename…', onClick: rename },
+        !menu.fixed && { label: 'Remove zone', onClick: remove },
     ]
 
     return <Menu x={menu.x} y={menu.y} title={menu.name} items={items} onClose={onClose} />
