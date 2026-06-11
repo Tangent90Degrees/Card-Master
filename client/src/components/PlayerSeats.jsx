@@ -29,54 +29,12 @@ export function seatPlacement(f) {
  * Anchor a seat toward the nearest edge/corner of the field so its box always
  * stays inside (no off-screen overflow, even with 8 seats). Edge-hugging seats
  * also line their left/right boundary up with the hand's frame.
+ *
+ * Every seat — occupied or empty — is drawn by Game as a station (avatar/sit
+ * button + play area) using these helpers; there's no standalone seat component.
  */
 export function anchorFor(x, y) {
     const tx = x < 25 ? '0' : x > 75 ? '-100%' : '-50%'
     const ty = y < 25 ? '0' : y > 75 ? '-100%' : '-50%'
     return `translate(${tx}, ${ty})`
-}
-
-/**
- * The EMPTY seats arranged along the edges of the table. Occupied seats are drawn
- * as full "stations" (avatar + play area) by Game; here we only render the open
- * slots so spectators/seated players can sit or move into them. The view is
- * rotated so the local player's slot is at the bottom-centre.
- */
-export default function PlayerSeats({ seats, players, youId, onSit }) {
-    const bySeat = new Map(players.filter((p) => p.seat !== null).map((p) => [p.seat, p]))
-    const me = players.find((p) => p.id === youId)
-    const mySeat = me?.seat ?? null
-    const amSpectator = mySeat === null
-    const offset = mySeat ?? 0
-
-    return (
-        // Seated: reserve the bottom strip for the hand (`.seats.seated`). Spectating:
-        // no hand, so seats spread across the full table edges.
-        <div className={`seats ${amSpectator ? '' : 'seated'}`}>
-            {Array.from({ length: seats }, (_, i) => {
-                if (bySeat.get(i)) return null // occupied → drawn as a station by Game
-                const rel = (((i - offset) % seats) + seats) % seats
-                const { x, y } = seatPlacement(rel / seats)
-                return (
-                    // Empty seat: a full station-sized placeholder (avatar + an empty
-                    // play area) so it matches a seated player's station.
-                    <div
-                        key={i}
-                        className="seat empty"
-                        style={{ left: `${x}%`, top: `${y}%`, transform: anchorFor(x, y) }}
-                    >
-                        <div className="seat-header">
-                            <div className="avatar empty-avatar">{i + 1}</div>
-                            {/* Both spectators and seated players can take an empty seat —
-                                a seated player moves there (keeping their hand). */}
-                            <button className="zone-btn" onClick={() => onSit(i)}>
-                                {amSpectator ? 'Sit here' : 'Move here'}
-                            </button>
-                        </div>
-                        <div className="seat-body" />
-                    </div>
-                )
-            })}
-        </div>
-    )
 }

@@ -219,7 +219,9 @@ export function attachSockets(io) {
         )
         socket.on(
             'zone:handCard',
-            action((room, pid, p) => room.handCardToZone(pid, p.cardId, p.zoneId, p.index)),
+            action((room, pid, p) =>
+                room.handCardToZone(pid, p.cardId, p.zoneId, p.index, p.faceUp),
+            ),
         )
         socket.on(
             'zone:reorder',

@@ -18,6 +18,8 @@ const Hand = forwardRef(function Hand(
         highlight,
         mode = 'overlapped',
         onToggleDisplay,
+        playFaceUp = true,
+        onTogglePlayFace,
         onSort,
         onCardPointerDown,
     },
@@ -164,6 +166,13 @@ const Hand = forwardRef(function Hand(
                         title="Toggle card display"
                     >
                         Display: {tiled ? 'Tiled' : 'Overlapped'}
+                    </button>
+                    <button
+                        className="zone-btn"
+                        onClick={onTogglePlayFace}
+                        title="Toggle whether cards you play land face up or face down"
+                    >
+                        Play: {playFaceUp ? 'Face up' : 'Face down'}
                     </button>
                     <button
                         className="zone-btn stand-up"

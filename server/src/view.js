@@ -20,11 +20,18 @@ export function serializeFor(room, viewerId) {
         })
     }
 
+    // Map each occupied seat to its player, so a board can name its current owner.
+    const playerBySeat = new Map(
+        room.players.filter((p) => p.seat !== null).map((p) => [p.seat, p.id]),
+    )
+
     const zones = []
     for (const zone of room.zones.values()) {
+        const seat = zone.seat ?? null
         zones.push({
             id: zone.id,
-            ownerId: zone.ownerId ?? null,
+            seat, // null for a table zone; a seat index for a play area (board)
+            ownerId: seat == null ? null : (playerBySeat.get(seat) ?? null),
             x: zone.x,
             y: zone.y,
             name: zone.name,

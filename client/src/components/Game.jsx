@@ -3,7 +3,7 @@ import Card from './Card.jsx'
 import Pile from './Pile.jsx'
 import Hand from './Hand.jsx'
 import Zone from './Zone.jsx'
-import PlayerSeats, { seatPlacement, anchorFor, initials } from './PlayerSeats.jsx'
+import { seatPlacement, anchorFor, initials } from './PlayerSeats.jsx'
 import Menu from './Menu.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import ZoneMenu from './ZoneMenu.jsx'
@@ -93,6 +93,10 @@ export default function Game({ game }) {
     // hand defaults to overlapped, zones/boards to tiled.
     const [displayModes, setDisplayModes] = useState({})
     const handMode = displayModes.hand ?? 'overlapped'
+
+    // Whether cards I play from my hand land face up (default) or face down. A
+    // local, per-player preference toggled from the hand bar.
+    const [playFaceUp, setPlayFaceUp] = useState(true)
     function toggleDisplay(id, def) {
         setDisplayModes((prev) => {
             const cur = prev[id] ?? def
@@ -153,7 +157,7 @@ export default function Game({ game }) {
     const [zoneOrder, setZoneOrder] = useState([])
     useEffect(() => {
         setZoneOrder((prev) => {
-            const liveIds = state.zones.filter((z) => !z.ownerId).map((z) => z.id)
+            const liveIds = state.zones.filter((z) => z.seat == null).map((z) => z.id)
             const liveSet = new Set(liveIds)
             const kept = prev.filter((id) => liveSet.has(id))
             const keptSet = new Set(kept)
@@ -932,7 +936,7 @@ export default function Game({ game }) {
             name: zone.name,
             layout: zone.layout,
             perRow: zone.perRow,
-            fixed: !!zone.ownerId, // a board has no rename/remove
+            fixed: zone.seat != null, // a board has no rename/remove
         })
     }
 
@@ -1046,7 +1050,11 @@ export default function Game({ game }) {
                         {
                             zoneId: t.zoneId,
                             index: t.index,
-                            item: { id: `opt-${card.id}`, count: 1, cards: [cardView(card, true)] },
+                            item: {
+                                id: `opt-${card.id}`,
+                                count: 1,
+                                cards: [cardView(card, playFaceUp)],
+                            },
                         },
                     ],
                     fromX,
@@ -1054,25 +1062,31 @@ export default function Game({ game }) {
                 })
             }
             bringZoneToFront(t.zoneId)
-            actions.handCardToZone(d.id, t.zoneId, t.index)
+            actions.handCardToZone(d.id, t.zoneId, t.index, playFaceUp)
         } else if (t.type === 'pile') {
             // Dropped over an existing pile → add the card on top of it.
             if (card) setPending({ hide: new Set([card.id]), addPiles: [], addZoneItems: [] })
-            actions.playOnPile(d.id, t.pileId, true)
+            actions.playOnPile(d.id, t.pileId, playFaceUp)
         } else if (t.type === 'table') {
             const { x, y } = clampSafe(t.x, t.y)
             if (card) {
                 setPending({
                     hide: new Set([card.id]),
                     addPiles: [
-                        { id: `opt-${card.id}`, x, y, count: 1, cards: [cardView(card, true)] },
+                        {
+                            id: `opt-${card.id}`,
+                            x,
+                            y,
+                            count: 1,
+                            cards: [cardView(card, playFaceUp)],
+                        },
                     ],
                     addZoneItems: [],
                     fromX,
                     fromY,
                 })
             }
-            actions.play(d.id, x, y, true)
+            actions.play(d.id, x, y, playFaceUp)
         } else {
             setOptimisticHand(handOrderWith(d, t.index)) // hold the new order until the server confirms
             actions.reorderHand(d.id, t.index)
@@ -1123,6 +1137,7 @@ export default function Game({ game }) {
 
     const me = state.players.find((p) => p.id === state.you)
     const amSeated = !!me && me.seat !== null
+    const amSpectator = !amSeated
     const spectatorCount = state.players.filter((p) => p.seat === null).length
 
     // An unselected pile drag carries only the TOP card: a floating carry card
@@ -1213,8 +1228,16 @@ export default function Game({ game }) {
     // Table zones in stacking order — last operated on top.
     const zoneRank = new Map(zoneOrder.map((id, i) => [id, i]))
     const orderedTableZones = display.zones
-        .filter((z) => !z.ownerId)
+        .filter((z) => z.seat == null)
         .sort((a, b) => (zoneRank.get(a.id) ?? Infinity) - (zoneRank.get(b.id) ?? Infinity))
+
+    // Play areas (boards), one per seat. Mine docks by the hand (board-self); every
+    // other seat — occupied or empty — is a station in the ring. Empty stations
+    // stay droppable and offer a sit/move button.
+    const seats = state.seats
+    const boards = display.zones.filter((z) => z.seat != null)
+    const myBoard = amSeated ? boards.find((b) => b.seat === me.seat) : null
+    const otherBoards = boards.filter((b) => b !== myBoard)
 
     return (
         <div className="game">
@@ -1278,13 +1301,6 @@ export default function Game({ game }) {
                 }}
                 onContextMenu={(e) => e.preventDefault()}
             >
-                <PlayerSeats
-                    seats={state.seats}
-                    players={state.players}
-                    youId={state.you}
-                    onSit={(seatIndex) => actions.takeSeat(seatIndex)}
-                />
-
                 {orderedTableZones.map((zone) => {
                     const opt = optimisticZones[zone.id]
                     let left = opt ? opt.x : zone.x
@@ -1324,81 +1340,87 @@ export default function Game({ game }) {
                 })}
 
                 {/* Your own play area docks at the bottom-right, on the hand's row. */}
-                {display.zones
-                    .filter((z) => z.ownerId === state.you)
-                    .map((board) => (
-                        <Zone
-                            key={board.id}
-                            zone={board}
-                            items={zoneItemsFor(board)}
-                            highlight={highlightZoneId === board.id}
-                            selectedIds={selectedIds}
-                            activeItemId={board.id === drag?.zoneId ? activeZoneItemId : null}
-                            fixed
-                            className="board board-self"
-                            label="Your area"
-                            onItemPointerDown={(e, item) => startZoneItemDrag(e, board.id, item)}
-                            onItemContextMenu={(e, item) => openItemMenu(e, board.id, item)}
-                            onContextMenu={(e) => openZoneMenu(e, board)}
-                            onSort={(e) => openSortMenu(e, board)}
-                        />
-                    ))}
+                {myBoard && (
+                    <Zone
+                        key={myBoard.id}
+                        zone={myBoard}
+                        items={zoneItemsFor(myBoard)}
+                        highlight={highlightZoneId === myBoard.id}
+                        selectedIds={selectedIds}
+                        activeItemId={myBoard.id === drag?.zoneId ? activeZoneItemId : null}
+                        fixed
+                        className="board board-self"
+                        label="Your area"
+                        onItemPointerDown={(e, item) => startZoneItemDrag(e, myBoard.id, item)}
+                        onItemContextMenu={(e, item) => openItemMenu(e, myBoard.id, item)}
+                        onContextMenu={(e) => openZoneMenu(e, myBoard)}
+                        onSort={(e) => openSortMenu(e, myBoard)}
+                    />
+                )}
 
-                {/* Other players' stations — avatar + play area at their seat. Rendered
-                    in the same inset ring as the empty seats (PlayerSeats) so a seat's
-                    position doesn't shift when a player sits down. */}
+                {/* Every other seat's station — avatar + play area at its position. An
+                    occupied seat shows its player; an empty seat shows a sit/move
+                    button but still holds (and accepts) cards. The ring shares the
+                    exact inset of .seats so a seat doesn't shift when it fills. */}
                 <div className={`station-ring ${amSeated ? 'seated' : ''}`}>
-                    {display.zones
-                        .filter((z) => z.ownerId && z.ownerId !== state.you)
-                        .map((board) => {
-                            const owner = state.players.find((p) => p.id === board.ownerId)
-                            const seats = state.seats
-                            const rel =
-                                ((((owner?.seat ?? 0) - (me?.seat ?? 0)) % seats) + seats) % seats
-                            const { x, y } = seatPlacement(rel / seats)
-                            const stationHeader = (
-                                <>
-                                    <div
-                                        className="avatar"
-                                        style={{ background: owner?.color ?? '#555' }}
-                                    >
-                                        {initials(owner?.name)}
-                                    </div>
-                                    <div className="station-id">
-                                        <div className="station-name">{owner?.name}</div>
-                                        <div className="station-count">
-                                            {owner?.handCount ?? 0} 🂠
-                                        </div>
-                                    </div>
-                                </>
-                            )
-                            return (
-                                <Zone
-                                    key={board.id}
-                                    zone={board}
-                                    items={zoneItemsFor(board)}
-                                    highlight={highlightZoneId === board.id}
-                                    selectedIds={selectedIds}
-                                    activeItemId={
-                                        board.id === drag?.zoneId ? activeZoneItemId : null
-                                    }
-                                    fixed
-                                    className={`board board-station ${owner && !owner.connected ? 'offline' : ''}`}
-                                    style={{
-                                        left: `${x}%`,
-                                        top: `${y}%`,
-                                        transform: anchorFor(x, y),
-                                    }}
-                                    header={stationHeader}
-                                    showActions={false}
-                                    onItemPointerDown={(e, item) =>
-                                        startZoneItemDrag(e, board.id, item)
-                                    }
-                                    onItemContextMenu={(e, item) => openItemMenu(e, board.id, item)}
-                                    onContextMenu={(e) => openZoneMenu(e, board)}
-                                />
-                            )
-                        })}
+                    {otherBoards.map((board) => {
+                        const owner = state.players.find(
+                            (p) => p.seat !== null && p.seat === board.seat,
+                        )
+                        const rel = (((board.seat - (me?.seat ?? 0)) % seats) + seats) % seats
+                        const { x, y } = seatPlacement(rel / seats)
+                        const header = owner ? (
+                            <>
+                                <div
+                                    className="avatar"
+                                    style={{ background: owner.color ?? '#555' }}
+                                >
+                                    {initials(owner.name)}
+                                </div>
+                                <div className="station-id">
+                                    <div className="station-name">{owner.name}</div>
+                                    <div className="station-count">{owner.handCount ?? 0} 🂠</div>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div className="avatar empty-avatar">{board.seat + 1}</div>
+                                <button
+                                    className="zone-btn"
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onClick={() => actions.takeSeat(board.seat)}
+                                >
+                                    {amSpectator ? 'Sit here' : 'Move here'}
+                                </button>
+                            </>
+                        )
+                        return (
+                            <Zone
+                                key={board.id}
+                                zone={board}
+                                items={zoneItemsFor(board)}
+                                highlight={highlightZoneId === board.id}
+                                selectedIds={selectedIds}
+                                activeItemId={board.id === drag?.zoneId ? activeZoneItemId : null}
+                                fixed
+                                className={`board board-station ${owner ? '' : 'empty'} ${
+                                    owner && !owner.connected ? 'offline' : ''
+                                }`}
+                                style={{
+                                    left: `${x}%`,
+                                    top: `${y}%`,
+                                    transform: anchorFor(x, y),
+                                }}
+                                header={header}
+                                showActions={false}
+                                onItemPointerDown={(e, item) =>
+                                    startZoneItemDrag(e, board.id, item)
+                                }
+                                onItemContextMenu={(e, item) => openItemMenu(e, board.id, item)}
+                                onContextMenu={(e) => openZoneMenu(e, board)}
+                            />
+                        )
+                    })}
                 </div>
 
                 {orderedPiles.map((pile) => {
@@ -1509,6 +1531,8 @@ export default function Game({ game }) {
                     highlight={handHighlight}
                     mode={handMode}
                     onToggleDisplay={() => toggleDisplay('hand', 'overlapped')}
+                    playFaceUp={playFaceUp}
+                    onTogglePlayFace={() => setPlayFaceUp((v) => !v)}
                     onSort={openHandSort}
                     onCardPointerDown={startHandDrag}
                 />

@@ -304,27 +304,33 @@ describe('batch selection operations', () => {
 })
 
 describe('player boards (play areas)', () => {
-    function seatedRoom() {
+    function room1() {
         const room = new Room('BRD1', { decks: 1, jokers: 0 })
         const a = room.addPlayer('A')
-        room.takeSeat(a.id, 0)
         return { room, a }
     }
 
-    it('sitting down creates an owned, anchored board', () => {
-        const { room, a } = seatedRoom()
-        const board = room.findBoard(a.id)
-        expect(board).toBeTruthy()
-        expect(board.ownerId).toBe(a.id)
-        // anchored: can't be moved, renamed or removed
+    it('every seat has a play area that exists regardless of occupancy', () => {
+        const { room } = room1() // nobody seated yet
+        for (let i = 0; i < room.seats; i++) {
+            const board = room.findBoard(i)
+            expect(board).toBeTruthy()
+            expect(board.seat).toBe(i)
+        }
+    })
+
+    it('boards are anchored — they can not be moved, renamed or removed', () => {
+        const { room } = room1()
+        const board = room.findBoard(0)
         expect(room.moveZone(board.id, 10, 10)).toBe(false)
         expect(room.renameZone(board.id, 'x')).toBe(false)
         expect(room.removeZone(board.id, {})).toBe(false)
     })
 
-    it('standing up removes the board, leaving its cards on the table', () => {
-        const { room, a } = seatedRoom()
-        const board = room.findBoard(a.id)
+    it('a seat keeps its cards when its player stands up', () => {
+        const { room, a } = room1()
+        room.takeSeat(a.id, 0)
+        const board = room.findBoard(0)
         const deckId = [...room.piles.keys()][0]
         const top = room.split(deckId, 2, 50, 50) && [...room.piles.values()].at(-1)
         room.pileToZone(top.id, board.id, 0)
@@ -332,22 +338,55 @@ describe('player boards (play areas)', () => {
         const pilesBefore = room.piles.size
 
         room.leaveSeat(a.id)
-        expect(room.findBoard(a.id)).toBe(null)
-        expect(room.piles.size).toBe(pilesBefore + 1) // the board's item became a table pile
+        // The board (and its cards) stay put — nothing spills onto the table.
+        expect(room.findBoard(0)).toBe(board)
+        expect(board.items).toHaveLength(1)
+        expect(room.piles.size).toBe(pilesBefore)
     })
 
-    it('reset gives seated players a fresh empty board', () => {
-        const { room, a } = seatedRoom()
-        const board = room.findBoard(a.id)
+    it('changing seats leaves the original seat’s cards behind', () => {
+        const { room, a } = room1()
+        room.takeSeat(a.id, 0)
+        const board0 = room.findBoard(0)
+        const deckId = [...room.piles.keys()][0]
+        const top = room.split(deckId, 1, 60, 60) && [...room.piles.values()].at(-1)
+        room.pileToZone(top.id, board0.id, 0)
+
+        room.takeSeat(a.id, 1) // move to seat 1
+        expect(a.seat).toBe(1)
+        expect(room.findBoard(0).items).toHaveLength(1) // seat 0 keeps the card
+        expect(room.findBoard(1).items).toHaveLength(0) // seat 1 is its own empty area
+    })
+
+    it('shrinking the seats dissolves removed seats’ areas onto the table', () => {
+        const { room, a } = room1()
+        room.takeSeat(a.id, 3)
+        const board3 = room.findBoard(3)
+        const deckId = [...room.piles.keys()][0]
+        const card = room.split(deckId, 1, 70, 70) && [...room.piles.values()].at(-1)
+        room.pileToZone(card.id, board3.id, 0)
+        const pilesBefore = room.piles.size
+
+        room.setSeats(2)
+        expect(room.findBoard(3)).toBe(null) // seat 3 is gone
+        expect(room.piles.size).toBe(pilesBefore + 1) // its card spilled to the table
+    })
+
+    it('reset clears boards but keeps one empty area per seat', () => {
+        const { room, a } = room1()
+        room.takeSeat(a.id, 0)
+        const board = room.findBoard(0)
         const deckId = [...room.piles.keys()][0]
         const top = room.split(deckId, 1, 60, 60) && [...room.piles.values()].at(-1)
         room.pileToZone(top.id, board.id, 0)
-        expect(room.findBoard(a.id).items).toHaveLength(1)
+        expect(room.findBoard(0).items).toHaveLength(1)
 
         room.reset()
-        const fresh = room.findBoard(a.id)
-        expect(fresh).toBeTruthy()
-        expect(fresh.items).toHaveLength(0)
+        for (let i = 0; i < room.seats; i++) {
+            const fresh = room.findBoard(i)
+            expect(fresh).toBeTruthy()
+            expect(fresh.items).toHaveLength(0)
+        }
     })
 })
 

@@ -164,8 +164,8 @@ export function useGame() {
                 socket.emit('zone:layout', { zoneId, mode, perRow }),
             pileToZone: (pileId, zoneId, index) =>
                 socket.emit('zone:addPile', { pileId, zoneId, index }),
-            handCardToZone: (cardId, zoneId, index) =>
-                socket.emit('zone:handCard', { cardId, zoneId, index }),
+            handCardToZone: (cardId, zoneId, index, faceUp = true) =>
+                socket.emit('zone:handCard', { cardId, zoneId, index, faceUp }),
             reorderZoneItem: (zoneId, itemId, toIndex) =>
                 socket.emit('zone:reorder', { zoneId, itemId, toIndex }),
             zoneItemToTable: (zoneId, itemId, x, y) =>

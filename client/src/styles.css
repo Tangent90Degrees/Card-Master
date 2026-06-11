@@ -193,6 +193,9 @@ body {
     width: var(--card-w);
     height: var(--card-h);
     cursor: grab;
+    /* Table cards sit above the player areas (seats / boards, z-index 1) so a pile
+       is never hidden behind a play area it overlaps. */
+    z-index: 2;
     /* Contain the selection ring's / count badge's z-index inside each pile so an
        overlapping pile that paints later fully occludes a lower pile's ring. */
     isolation: isolate;
@@ -359,7 +362,7 @@ body {
     top: 8px;
     bottom: 8px;
     pointer-events: none; /* never block dragging cards underneath */
-    z-index: 2;
+    z-index: 1; /* a player area: below table piles/zones (z-index 2) */
 }
 .seats.seated {
     bottom: 184px;
@@ -373,7 +376,7 @@ body {
     top: 8px;
     bottom: 8px;
     pointer-events: none;
-    z-index: 3;
+    z-index: 1; /* a player area: below table piles/zones (z-index 2) */
 }
 .station-ring.seated {
     bottom: 184px;
@@ -779,6 +782,9 @@ body {
 /* ---------- Zones ---------- */
 .zone {
     position: absolute;
+    /* Table zones sit above the player areas (z-index 1); boards drop back to 1
+       via the more-specific .zone.board rule below. */
+    z-index: 2;
     width: max-content;
     /* Floor the width at two cards (cards + gap + item padding + border) so an
        empty or single-card single-row zone is exactly as wide as a two-card one. */
@@ -937,7 +943,7 @@ body {
 /* Boards reuse the frosted .zone look; an owner-accent border sets them apart
    from table zones, and their header isn't a drag handle. */
 .zone.board {
-    z-index: 3;
+    z-index: 1; /* a player area: below table piles/zones so table content shows on top */
     border-color: rgba(242, 193, 78, 0.45);
 }
 .zone.board .zone-header {
@@ -965,6 +971,14 @@ body {
 .zone.board-station {
     width: 220px;
     max-width: 220px;
+}
+/* An empty seat's play area: a lighter, open placeholder (still holds/accepts
+   cards) with a sit/move button in its header. */
+.zone.board-station.empty {
+    background: rgba(11, 28, 20, 0.28);
+    border-style: dashed;
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow: none;
 }
 .zone.board-station.offline {
     opacity: 0.5;
