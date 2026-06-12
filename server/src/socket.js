@@ -17,11 +17,23 @@ export function attachSockets(io) {
         }
     }
 
+    // Live drags ride their own lightweight channel (not the full state snapshot),
+    // so the ~30/sec position updates during a drag stay cheap.
+    function broadcastDrags(room) {
+        const payload = room.serializeDrags()
+        for (const player of room.players) {
+            const s = socketsByPlayer.get(player.id)
+            if (s && s.connected) s.emit('drags', payload)
+        }
+    }
+
     function bindToPlayer(socket, room, player) {
         socket.data.code = room.code
         socket.data.playerId = player.id
         socket.join(room.code)
         socketsByPlayer.set(player.id, socket)
+        // Catch the new socket up on any drags already in flight.
+        socket.emit('drags', room.serializeDrags())
     }
 
     io.on('connection', (socket) => {
@@ -160,6 +172,20 @@ export function attachSockets(io) {
             action((room, pid, p) => room.reorderHand(pid, p.cardId, p.toIndex)),
         )
         socket.on(
+            'hand:playMany',
+            action((room, pid, p) => room.playManyFromHand(pid, p.cardIds, p.placements, p.faceUp)),
+        )
+        socket.on(
+            'hand:reorderMany',
+            action((room, pid, p) => room.reorderHandMany(pid, p.cardIds, p.toIndex)),
+        )
+        socket.on(
+            'zone:handCards',
+            action((room, pid, p) =>
+                room.handCardsToZone(pid, p.cardIds, p.zoneId, p.index, p.faceUp),
+            ),
+        )
+        socket.on(
             'hand:sort',
             action((room, pid, p) => room.sortHand(pid, p.by)),
         )
@@ -190,6 +216,26 @@ export function attachSockets(io) {
         socket.on(
             'room:setSeats',
             action((room, _pid, p) => room.setSeats(p.seats)),
+        )
+
+        // --- live drags (their own lightweight broadcast) ------------------
+        const dragAction = (fn) => (payload) => {
+            const room = store.get(socket.data.code)
+            const playerId = socket.data.playerId
+            if (!room || !playerId) return
+            if (fn(room, playerId, payload || {})) broadcastDrags(room)
+        }
+        socket.on(
+            'drag:start',
+            dragAction((room, pid, p) => room.startDrag(pid, p)),
+        )
+        socket.on(
+            'drag:move',
+            dragAction((room, pid, p) => room.moveDrag(pid, p.x, p.y)),
+        )
+        socket.on(
+            'drag:end',
+            dragAction((room, pid) => room.endDrag(pid)),
         )
 
         // --- zones ---------------------------------------------------------
@@ -286,6 +332,8 @@ export function attachSockets(io) {
             if (socketsByPlayer.get(playerId) !== socket) return
             socketsByPlayer.delete(playerId)
             room.setConnected(playerId, false)
+            // Drop any drag they were mid-way through, so it doesn't lock forever.
+            if (room.endDrag(playerId)) broadcastDrags(room)
             broadcast(room)
 
             const timer = setTimeout(() => {

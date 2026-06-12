@@ -46,6 +46,9 @@ export class Room {
         this.hands = new Map() // playerId -> [cardId, ...]
         this.players = [] // [{ id, name, connected, color, seat }]
         this.seats = 4 // number of playable seats; the rest are spectators
+        // Live, in-progress drags so everyone sees a card being moved in real time.
+        // playerId -> { kind, pieceIds, card, x, y }. Ephemeral; never persisted.
+        this.drags = new Map()
 
         this.seed()
     }
@@ -155,11 +158,50 @@ export class Room {
         if (idx === -1) return
         this.returnHandToTable(playerId)
         this.hands.delete(playerId)
+        this.drags.delete(playerId)
         this.players.splice(idx, 1)
     }
 
     get isEmpty() {
         return this.players.length === 0
+    }
+
+    // ---- live drags (ephemeral, broadcast for real-time collaboration) ----
+    // While a player drags a table piece, everyone else sees a labelled ghost
+    // follow along and can't grab the same piece. These methods only touch the
+    // `drags` map — the authoritative card state changes only when the drop lands.
+
+    /** Begin (or replace) this player's live drag. Returns true if it changed. */
+    startDrag(playerId, info = {}) {
+        if (!this.getPlayer(playerId)) return false
+        this.drags.set(playerId, {
+            playerId,
+            kind: String(info.kind || 'piece'),
+            pieceIds: Array.isArray(info.pieceIds) ? info.pieceIds.map(String) : [],
+            card: publicDragCard(info.card),
+            x: Number(info.x) || 0,
+            y: Number(info.y) || 0,
+        })
+        return true
+    }
+
+    /** Update the cursor position of this player's live drag. */
+    moveDrag(playerId, x, y) {
+        const d = this.drags.get(playerId)
+        if (!d) return false
+        d.x = Number(x) || 0
+        d.y = Number(y) || 0
+        return true
+    }
+
+    /** End this player's live drag (on drop or cancel). */
+    endDrag(playerId) {
+        return this.drags.delete(playerId)
+    }
+
+    /** The live drags as a plain array, for broadcasting. */
+    serializeDrags() {
+        return [...this.drags.values()].map((d) => ({ ...d, pieceIds: [...d.pieceIds] }))
     }
 
     // ---- pile helpers ----------------------------------------------------
@@ -800,6 +842,65 @@ export class Room {
         return true
     }
 
+    // ---- batch hand operations (marquee selection of hand cards) ----------
+    // Each runs as a SINGLE mutation so a multi-card play/reorder produces one
+    // snapshot — no per-card blink.
+
+    /** Play several hand cards onto the table at once. placements: { cardId: {x,y} }. */
+    playManyFromHand(playerId, cardIds, placements, faceUp = true) {
+        if (!this.isSeated(playerId)) return false
+        const hand = this.hands.get(playerId)
+        if (!hand) return false
+        let any = false
+        for (const cardId of cardIds || []) {
+            const idx = hand.indexOf(cardId)
+            const pos = placements && placements[cardId]
+            if (idx === -1 || !pos) continue
+            hand.splice(idx, 1)
+            const card = this.cards.get(cardId)
+            if (card) card.faceUp = !!faceUp
+            this.addPile(pos.x, pos.y, [cardId])
+            any = true
+        }
+        return any
+    }
+
+    /** Play several hand cards into a zone, each as a new single-card item. */
+    handCardsToZone(playerId, cardIds, zoneId, index, faceUp = true) {
+        if (!this.isSeated(playerId)) return false
+        const hand = this.hands.get(playerId)
+        const zone = this.zones.get(zoneId)
+        if (!hand || !zone) return false
+        let at = clampInt(index, 0, zone.items.length)
+        let any = false
+        for (const cardId of cardIds || []) {
+            const idx = hand.indexOf(cardId)
+            if (idx === -1) continue
+            hand.splice(idx, 1)
+            const card = this.cards.get(cardId)
+            if (card) card.faceUp = !!faceUp
+            zone.items.splice(at++, 0, { id: nanoid(8), cardIds: [cardId] })
+            any = true
+        }
+        return any
+    }
+
+    /**
+     * Move several hand cards, as one contiguous block (keeping their relative
+     * order), to `toIndex` measured against the cards that AREN'T moving.
+     */
+    reorderHandMany(playerId, cardIds, toIndex) {
+        const hand = this.hands.get(playerId)
+        if (!hand) return false
+        const moving = new Set((cardIds || []).filter((id) => hand.includes(id)))
+        if (moving.size === 0) return false
+        const block = hand.filter((id) => moving.has(id)) // preserve current order
+        const rest = hand.filter((id) => !moving.has(id))
+        rest.splice(clampInt(toIndex, 0, rest.length), 0, ...block)
+        this.hands.set(playerId, rest)
+        return true
+    }
+
     /**
      * Sort an array of card ids by 'rank' (default) or 'suit', highest first
      * (left). Rank order high→low is Joker, A, K, Q, J, 10 … 2.
@@ -868,6 +969,23 @@ export class Room {
 
 function top(pile) {
     return pile.cardIds[pile.cardIds.length - 1]
+}
+
+/**
+ * Sanitize a drag's ghost card before it's broadcast: keep only public fields,
+ * and strip rank/suit unless the card is face up — so a face-down card being
+ * dragged never leaks its face to other players, mirroring the table's privacy.
+ */
+function publicDragCard(card) {
+    if (!card || typeof card !== 'object') return null
+    const faceUp = !!card.faceUp
+    if (!faceUp) return { id: String(card.id), faceUp: false }
+    const out = { id: String(card.id), faceUp: true, rank: card.rank, suit: card.suit }
+    if (card.isJoker) {
+        out.isJoker = true
+        out.variant = card.variant || 'color'
+    }
+    return out
 }
 
 function clampCoord(n) {

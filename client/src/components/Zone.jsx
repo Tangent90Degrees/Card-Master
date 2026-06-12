@@ -18,6 +18,7 @@ export default function Zone({
     dragging,
     highlight,
     selectedIds,
+    lockedIds, // ids of items another player is dragging (can't be grabbed)
     activeItemId,
     fixed, // a player's board: anchored, header isn't a drag handle
     className,
@@ -115,7 +116,9 @@ export default function Zone({
                             data-zoneitem={item.id}
                             className={`zone-item ${item.count > 1 ? 'stacked' : ''} ${
                                 activeItemId === item.id ? 'active' : ''
-                            } ${selectedIds?.has(item.id) ? 'selected' : ''}`}
+                            } ${selectedIds?.has(item.id) ? 'selected' : ''} ${
+                                lockedIds?.has(item.id) ? 'locked' : ''
+                            }`}
                             onPointerDown={(e) => onItemPointerDown(e, item)}
                             onContextMenu={(e) => onItemContextMenu(e, item)}
                         >

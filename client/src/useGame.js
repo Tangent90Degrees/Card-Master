@@ -44,6 +44,8 @@ export function useGame() {
     const [connected, setConnected] = useState(socket.connected)
     const [joined, setJoined] = useState(false)
     const [state, setState] = useState(null)
+    // Other players' in-progress drags (their own lightweight channel).
+    const [drags, setDrags] = useState([])
     const [error, setError] = useState(null)
     // True while we attempt to restore a stored session, to avoid flashing the lobby.
     const [resuming, setResuming] = useState(() => !!loadSession())
@@ -72,12 +74,17 @@ export function useGame() {
             setConnected(true)
             tryResume()
         }
-        const onDisconnect = () => setConnected(false)
+        const onDisconnect = () => {
+            setConnected(false)
+            setDrags([]) // any live drags are stale once we drop
+        }
         const onState = (snapshot) => setState(snapshot)
+        const onDrags = (payload) => setDrags(Array.isArray(payload) ? payload : [])
 
         socket.on('connect', onConnect)
         socket.on('disconnect', onDisconnect)
         socket.on('state', onState)
+        socket.on('drags', onDrags)
 
         // If the socket connected before listeners were attached, resume now.
         if (socket.connected) tryResume()
@@ -86,6 +93,7 @@ export function useGame() {
             socket.off('connect', onConnect)
             socket.off('disconnect', onDisconnect)
             socket.off('state', onState)
+            socket.off('drags', onDrags)
         }
     }, [])
 
@@ -148,6 +156,12 @@ export function useGame() {
             playOnPile: (cardId, pileId, faceUp = true) =>
                 socket.emit('hand:playOnPile', { cardId, pileId, faceUp }),
             reorderHand: (cardId, toIndex) => socket.emit('hand:reorder', { cardId, toIndex }),
+            playMany: (cardIds, placements, faceUp = true) =>
+                socket.emit('hand:playMany', { cardIds, placements, faceUp }),
+            reorderHandMany: (cardIds, toIndex) =>
+                socket.emit('hand:reorderMany', { cardIds, toIndex }),
+            handCardsToZone: (cardIds, zoneId, index, faceUp = true) =>
+                socket.emit('zone:handCards', { cardIds, zoneId, index, faceUp }),
             sortHand: (by) => socket.emit('hand:sort', { by }),
             shuffleHand: () => socket.emit('hand:shuffle', {}),
             deal: (pileId, count) => socket.emit('deck:deal', { pileId, count }),
@@ -186,9 +200,24 @@ export function useGame() {
                 socket.emit('zone:dealItem', { zoneId, itemId, count }),
             sortZone: (zoneId, by) => socket.emit('zone:sort', { zoneId, by }),
             shuffleZone: (zoneId) => socket.emit('zone:shuffle', { zoneId }),
+            // Live drag broadcast (real-time, so others see what's being moved).
+            startDrag: (info) => socket.emit('drag:start', info),
+            moveDrag: (x, y) => socket.emit('drag:move', { x, y }),
+            endDrag: () => socket.emit('drag:end', {}),
         }),
         [],
     )
 
-    return { connected, joined, resuming, state, error, createRoom, joinRoom, leaveRoom, actions }
+    return {
+        connected,
+        joined,
+        resuming,
+        state,
+        drags,
+        error,
+        createRoom,
+        joinRoom,
+        leaveRoom,
+        actions,
+    }
 }

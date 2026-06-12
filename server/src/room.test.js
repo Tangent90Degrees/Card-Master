@@ -605,3 +605,128 @@ describe('zones', () => {
         expect(room.zones.get(zone.id).items).toHaveLength(0)
     })
 })
+
+describe('batch hand operations (hand marquee selection)', () => {
+    function seatedHand(specs) {
+        const { room, playerId } = roomWithHand(specs)
+        room.takeSeat(playerId, 0)
+        return { room, playerId }
+    }
+
+    it('plays several hand cards to the table in one mutation', () => {
+        const { room, playerId } = seatedHand([
+            ['A', 'S'],
+            ['K', 'H'],
+            ['Q', 'D'],
+        ])
+        const [a, k] = room.hands.get(playerId)
+        const before = room.piles.size
+        const ok = room.playManyFromHand(
+            playerId,
+            [a, k],
+            { [a]: { x: 10, y: 10 }, [k]: { x: 40, y: 40 } },
+            true,
+        )
+        expect(ok).toBe(true)
+        expect(room.hands.get(playerId)).toHaveLength(1) // only Q left
+        expect(room.piles.size).toBe(before + 2) // two new face-up single-card piles
+        expect(room.cards.get(a).faceUp).toBe(true)
+    })
+
+    it('respects the face-down play option', () => {
+        const { room, playerId } = seatedHand([['A', 'S']])
+        const [a] = room.hands.get(playerId)
+        room.playManyFromHand(playerId, [a], { [a]: { x: 0, y: 0 } }, false)
+        expect(room.cards.get(a).faceUp).toBe(false)
+    })
+
+    it('plays several hand cards into a zone as items', () => {
+        const { room, playerId } = seatedHand([
+            ['A', 'S'],
+            ['K', 'H'],
+        ])
+        const zone = room.createZone(0, 0)
+        const ids = [...room.hands.get(playerId)]
+        expect(room.handCardsToZone(playerId, ids, zone.id, 0, true)).toBe(true)
+        expect(room.hands.get(playerId)).toHaveLength(0)
+        expect(room.zones.get(zone.id).items).toHaveLength(2)
+    })
+
+    it('moves a selected block to a new position, keeping its order', () => {
+        const { room, playerId } = roomWithHand([
+            ['A', 'S'],
+            ['K', 'H'],
+            ['Q', 'D'],
+            ['J', 'C'],
+        ])
+        const hand = [...room.hands.get(playerId)] // [AS, KH, QD, JC]
+        // Move AS and QD to the end (index 2 among the non-moving [KH, JC]).
+        expect(room.reorderHandMany(playerId, [hand[0], hand[2]], 2)).toBe(true)
+        expect(labels(room, playerId)).toEqual(['KH', 'JC', 'AS', 'QD'])
+    })
+
+    it('only a seated player can play to the table/zone', () => {
+        const { room, playerId } = roomWithHand([['A', 'S']]) // not seated
+        const [a] = room.hands.get(playerId)
+        expect(room.playManyFromHand(playerId, [a], { [a]: { x: 0, y: 0 } })).toBe(false)
+    })
+})
+
+describe('live drags (real-time collaboration)', () => {
+    function room1() {
+        const room = new Room('DRAG1', { decks: 1, jokers: 0 })
+        const a = room.addPlayer('A')
+        return { room, a }
+    }
+
+    it('tracks a drag through start / move / end and serializes it', () => {
+        const { room, a } = room1()
+        expect(room.serializeDrags()).toHaveLength(0)
+
+        expect(room.startDrag(a.id, { kind: 'pile', pieceIds: ['p1'], x: 10, y: 20 })).toBe(true)
+        let [d] = room.serializeDrags()
+        expect(d).toMatchObject({ playerId: a.id, kind: 'pile', pieceIds: ['p1'], x: 10, y: 20 })
+
+        expect(room.moveDrag(a.id, 33, 44)).toBe(true)
+        ;[d] = room.serializeDrags()
+        expect(d).toMatchObject({ x: 33, y: 44 })
+
+        expect(room.endDrag(a.id)).toBe(true)
+        expect(room.serializeDrags()).toHaveLength(0)
+        expect(room.moveDrag(a.id, 1, 1)).toBe(false) // nothing to move after end
+    })
+
+    it('never leaks the face of a face-down card being dragged', () => {
+        const { room, a } = room1()
+        // A malicious/curious client could try to attach a full face to a face-down
+        // card; the server must strip it.
+        room.startDrag(a.id, {
+            kind: 'pile',
+            pieceIds: ['p1'],
+            card: { id: 'c1', faceUp: false, rank: 'A', suit: 'S' },
+        })
+        const [d] = room.serializeDrags()
+        expect(d.card).toEqual({ id: 'c1', faceUp: false })
+        expect(d.card.rank).toBeUndefined()
+        expect(d.card.suit).toBeUndefined()
+    })
+
+    it('keeps the face of a face-up dragged card', () => {
+        const { room, a } = room1()
+        room.startDrag(a.id, {
+            kind: 'zoneitem',
+            pieceIds: ['i1'],
+            card: { id: 'c2', faceUp: true, rank: 'K', suit: 'H' },
+        })
+        const [d] = room.serializeDrags()
+        expect(d.card).toMatchObject({ id: 'c2', faceUp: true, rank: 'K', suit: 'H' })
+    })
+
+    it('drops a disconnected player’s drag when they are removed', () => {
+        const { room, a } = room1()
+        room.startDrag(a.id, { kind: 'pile', pieceIds: ['p1'] })
+        expect(room.serializeDrags()).toHaveLength(1)
+        room.removePlayer(a.id)
+        expect(room.serializeDrags()).toHaveLength(0)
+    })
+})

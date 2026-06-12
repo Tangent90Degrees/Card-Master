@@ -557,6 +557,26 @@ body {
     outline-offset: 1px;
     filter: drop-shadow(0 10px 12px rgba(0, 0, 0, 0.55));
 }
+/* A marquee-selected hand card — same yellow ring as a selected table piece. */
+.hand-card.selected::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 13px;
+    border: 2px solid #f2c14e;
+    box-shadow: 0 0 0 2px rgba(242, 193, 78, 0.22);
+    pointer-events: none;
+    z-index: 5;
+}
+/* The selection box dragged inside the hand (row-relative coords). */
+.hand-marquee {
+    position: absolute;
+    z-index: 20;
+    border: 1px solid #f2c14e;
+    background: rgba(242, 193, 78, 0.12);
+    border-radius: 3px;
+    pointer-events: none;
+}
 
 /* The card being carried onto the table: a solid, lifted card sitting exactly
    where it will drop. It tracks the cursor frame-by-frame (no position
@@ -1014,4 +1034,52 @@ body {
     pointer-events: none;
     transform: scale(1.05) rotate(-2deg);
     filter: drop-shadow(6px 12px 10px rgba(0, 0, 0, 0.5));
+}
+
+/* ---------- Other players' live drags ---------- */
+/* A ghost of the card another player is dragging, tracking their cursor in real
+   time, with a coloured name tag so you can see who's moving what. Positioned in
+   table-pixel coords (the same space piles use). */
+.remote-drag {
+    position: absolute;
+    pointer-events: none; /* never intercepts your own interactions */
+    z-index: 1400; /* above table piles/zones, below menus/modals */
+}
+.remote-ghost {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: var(--card-w);
+    height: var(--card-h);
+    filter: drop-shadow(0 10px 16px rgba(0, 0, 0, 0.5));
+}
+/* Name pill, just above the dragged piece. */
+.drag-tag {
+    position: absolute;
+    left: 0;
+    top: -20px;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+/* A piece another player is currently dragging: dimmed + not grabbable, so it
+   reads as "taken" while the live ghost shows where it's going. */
+.pile.locked,
+.zone-item.locked {
+    cursor: not-allowed;
+}
+.pile.locked {
+    opacity: 0.45;
+}
+.zone-item.locked {
+    opacity: 0.4;
 }

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useLayoutEffect, useRef } from 'react'
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Card from './Card.jsx'
 
 const FLIP_MS = 200
@@ -15,6 +15,7 @@ const Hand = forwardRef(function Hand(
         cards,
         actions,
         activeId,
+        activeIds, // a set of cards lifted together (a selected block being reordered)
         highlight,
         mode = 'overlapped',
         onToggleDisplay,
@@ -22,6 +23,9 @@ const Hand = forwardRef(function Hand(
         onTogglePlayFace,
         onSort,
         onCardPointerDown,
+        selectedIds, // hand card ids currently marquee-selected
+        onSelectionChange, // (Set) — report a new hand selection
+        disableHover, // suppress the hover fan (a table marquee / drag is active)
     },
     ref,
 ) {
@@ -35,6 +39,13 @@ const Hand = forwardRef(function Hand(
     const tiled = mode === 'tiled' // scroll instead of overlap when full
     const modeRef = useRef(mode)
     modeRef.current = mode
+
+    // Marquee selection inside the hand. Box coords are relative to the cards row.
+    const [marquee, setMarquee] = useState(null)
+    const marqueeRef = useRef(null)
+    const selectingRef = useRef(false)
+    const disableHoverRef = useRef(disableHover)
+    disableHoverRef.current = disableHover
 
     // Recompute the overlap step so the whole row spans the width exactly — the
     // cards overlap more as more are added, and never exceed the panel.
@@ -117,7 +128,10 @@ const Hand = forwardRef(function Hand(
     function applyFan(hoverId) {
         const el = cardsRef.current
         if (!el) return
+        // No hover fan while a selection box is being dragged (here or on the table)
+        // or anything is being dragged — the row should stay still.
         if (draggingRef.current || modeRef.current === 'tiled') hoverId = null
+        if (selectingRef.current || disableHoverRef.current) hoverId = null
         if (hoverId === hoverRef.current) return
         hoverRef.current = hoverId
 
@@ -151,6 +165,88 @@ const Hand = forwardRef(function Hand(
             node.style.zIndex = i === h ? '30' : ''
         })
     }
+
+    // The hand card ids whose rect intersects a marquee box (row-relative coords).
+    function cardsInBox(m) {
+        const el = cardsRef.current
+        if (!el) return new Set()
+        const box = el.getBoundingClientRect()
+        const rx0 = Math.min(m.x0, m.x1)
+        const ry0 = Math.min(m.y0, m.y1)
+        const rx1 = Math.max(m.x0, m.x1)
+        const ry1 = Math.max(m.y0, m.y1)
+        const ids = new Set()
+        for (const node of el.querySelectorAll('[data-handcard]')) {
+            const r = node.getBoundingClientRect()
+            const x0 = r.left - box.left
+            const y0 = r.top - box.top
+            if (x0 < rx1 && x0 + r.width > rx0 && y0 < ry1 && y0 + r.height > ry0)
+                ids.add(node.dataset.handcard)
+        }
+        return ids
+    }
+
+    // Start a selection box. A plain press on a card drags that card, so to box
+    // over the packed row you hold a modifier (Shift / Ctrl / Cmd); a plain press
+    // on empty space in the row starts a box too. (The card's own handler bails on
+    // the modifier — see startHandDrag — so the two never fight.)
+    function onMarqueeDown(e) {
+        if (e.button !== 0) return
+        const wantBox = e.shiftKey || e.ctrlKey || e.metaKey
+        const cardEl = e.target.closest('[data-handcard]')
+        if (cardEl && !wantBox) return
+        e.preventDefault()
+        const box = cardsRef.current.getBoundingClientRect()
+        const p = { x0: e.clientX - box.left, y0: e.clientY - box.top }
+        // Remember the card under the press so a modifier-click (no drag) can toggle it.
+        const m = { ...p, x1: p.x0, y1: p.y0, cardId: cardEl?.dataset.handcard ?? null }
+        marqueeRef.current = m
+        selectingRef.current = true
+        setMarquee(m)
+        applyFan(null) // collapse any fan while selecting
+        window.addEventListener('pointermove', onMarqueeMove)
+        window.addEventListener('pointerup', onMarqueeUp)
+    }
+
+    function onMarqueeMove(e) {
+        const m = marqueeRef.current
+        if (!m) return
+        const box = cardsRef.current.getBoundingClientRect()
+        const next = { ...m, x1: e.clientX - box.left, y1: e.clientY - box.top }
+        marqueeRef.current = next
+        setMarquee(next)
+        onSelectionChange?.(cardsInBox(next))
+    }
+
+    function onMarqueeUp() {
+        window.removeEventListener('pointermove', onMarqueeMove)
+        window.removeEventListener('pointerup', onMarqueeUp)
+        const m = marqueeRef.current
+        marqueeRef.current = null
+        selectingRef.current = false
+        setMarquee(null)
+        if (!m) return
+        const moved = Math.abs(m.x1 - m.x0) > 4 || Math.abs(m.y1 - m.y0) > 4
+        if (moved) {
+            onSelectionChange?.(cardsInBox(m))
+        } else if (m.cardId) {
+            // Modifier-click on a card with no drag → toggle just that card.
+            const next = new Set(selectedIds || [])
+            if (next.has(m.cardId)) next.delete(m.cardId)
+            else next.add(m.cardId)
+            onSelectionChange?.(next)
+        } else {
+            onSelectionChange?.(new Set()) // click empty space → clear
+        }
+    }
+
+    useEffect(
+        () => () => {
+            window.removeEventListener('pointermove', onMarqueeMove)
+            window.removeEventListener('pointerup', onMarqueeUp)
+        },
+        [],
+    )
 
     return (
         <footer className={`hand ${highlight ? 'highlight' : ''}`} ref={ref}>
@@ -186,22 +282,39 @@ const Hand = forwardRef(function Hand(
             <div
                 className={`hand-cards ${tiled ? 'tiled' : ''}`}
                 ref={cardsRef}
+                onPointerDown={onMarqueeDown}
                 onMouseOver={(e) => {
                     const card = e.target.closest('[data-handcard]')
                     if (card) applyFan(card.dataset.handcard)
                 }}
                 onMouseLeave={() => applyFan(null)}
             >
-                {cards.map((card) => (
+                {cards.map((card) => {
+                    const active = activeId === card.id || activeIds?.has(card.id)
+                    return (
+                        <div
+                            key={card.id}
+                            data-handcard={card.id}
+                            className={`hand-card ${active ? 'active' : ''} ${
+                                selectedIds?.has(card.id) && !active ? 'selected' : ''
+                            }`}
+                            onPointerDown={(e) => onCardPointerDown(e, card)}
+                        >
+                            <Card card={card} />
+                        </div>
+                    )
+                })}
+                {marquee && (
                     <div
-                        key={card.id}
-                        data-handcard={card.id}
-                        className={`hand-card ${activeId === card.id ? 'active' : ''}`}
-                        onPointerDown={(e) => onCardPointerDown(e, card)}
-                    >
-                        <Card card={card} />
-                    </div>
-                ))}
+                        className="hand-marquee"
+                        style={{
+                            left: Math.min(marquee.x0, marquee.x1),
+                            top: Math.min(marquee.y0, marquee.y1),
+                            width: Math.abs(marquee.x1 - marquee.x0),
+                            height: Math.abs(marquee.y1 - marquee.y0),
+                        }}
+                    />
+                )}
             </div>
         </footer>
     )

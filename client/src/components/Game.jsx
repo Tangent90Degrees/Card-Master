@@ -16,6 +16,7 @@ export const CARD_H = 104
 const CLICK_SLOP = 5 // px of movement below which a drag counts as a click
 const MERGE_RADIUS = 64 // px proximity to drop one pile onto another
 const FLY_MS = 200 // glide a card takes from the drop point to its new container
+const DRAG_THROTTLE_MS = 30 // min gap between live drag-position broadcasts (~33fps)
 
 // Keep dropped cards/zones clear of the player areas around the table — the seat
 // ring (top/sides) and the hand + play areas (bottom).
@@ -80,6 +81,14 @@ export default function Game({ game }) {
     const stateRef = useRef(state) // latest snapshot, read by window listeners
     stateRef.current = state
 
+    // Other players' in-progress drags. We use these to (a) lock the pieces they're
+    // moving so no one else can grab them and (b) draw a labelled ghost following
+    // their cursor. Our own drag is rendered locally, so it's filtered out here.
+    const remoteDrags = (game.drags || []).filter((d) => d.playerId !== state.you)
+    const lockedBy = new Map() // pieceId -> the remote drag holding it
+    for (const d of remoteDrags) for (const id of d.pieceIds) lockedBy.set(id, d)
+    const isLocked = (id) => lockedBy.has(id)
+
     const [drag, setDrag] = useState(null)
     const [menu, setMenu] = useState(null)
     const [zoneMenu, setZoneMenu] = useState(null)
@@ -125,6 +134,24 @@ export default function Game({ game }) {
             return changed ? next : prev
         })
     }, [state.piles, state.zones])
+
+    // Marquee selection of cards within the HAND (separate from the table set).
+    // Dragging a selected hand card carries the whole hand selection (play/reorder).
+    const [handSel, setHandSel] = useState(() => new Set())
+    useEffect(() => {
+        setHandSel((prev) => {
+            if (prev.size === 0) return prev
+            const live = new Set(state.hand.map((c) => c.id))
+            let changed = false
+            const next = new Set()
+            for (const id of prev) {
+                if (live.has(id)) next.add(id)
+                else changed = true
+            }
+            return changed ? next : prev
+        })
+    }, [state.hand])
+
     // Stacking order of table piles, low→high (last = rendered on top). A pile is
     // lifted to the top when it's operated on; newly appeared piles also land on
     // top. Render order follows this list so the most-recently-touched pile wins.
@@ -221,6 +248,16 @@ export default function Game({ game }) {
     const [pending, setPending] = useState(null)
     useLayoutEffect(() => setPending(null), [state])
 
+    // Other players' just-released drags. We keep the ghost lingering at the drop
+    // point until the next snapshot, then glide the resulting card(s) into place
+    // from there — so a remote move never snaps back to its origin, and plays /
+    // splits glide in instead of popping. Keyed by the dragger's id.
+    const [released, setReleased] = useState([])
+    const prevDragsRef = useRef([])
+    const releaseTimers = useRef([])
+    // Previous table layout, to spot which pieces moved / appeared after a release.
+    const prevTableRef = useRef({ pilePos: new Map(), itemIds: new Set() })
+
     // Glide each optimistically-placed card from the drop point to its new slot.
     useLayoutEffect(() => {
         if (!pending || pending.fromX == null || !tableRef.current) return
@@ -252,6 +289,93 @@ export default function Game({ game }) {
         }
     }, [pending])
 
+    // Notice when another player's drag ends: remember where they released it so
+    // the resulting card(s) can glide in from that point on the next snapshot.
+    useEffect(() => {
+        const now = game.drags || []
+        const live = new Map(now.map((d) => [d.playerId, d]))
+        const ended = prevDragsRef.current.filter(
+            (d) => d.playerId !== state.you && !live.has(d.playerId),
+        )
+        prevDragsRef.current = now
+        if (!ended.length) return
+        const entries = ended.map((d) => ({
+            id: d.playerId,
+            point: { x: d.x, y: d.y },
+            card: d.card,
+            kind: d.kind,
+            pieceIds: d.pieceIds,
+        }))
+        setReleased((r) => [...r, ...entries])
+        // Safety net: drop the lingering ghost even if no snapshot follows (e.g. a
+        // drag that ended without changing anything).
+        const endedIds = new Set(entries.map((e) => e.id))
+        const t = setTimeout(() => setReleased((r) => r.filter((x) => !endedIds.has(x.id))), 600)
+        releaseTimers.current.push(t)
+    }, [game.drags])
+
+    // On each snapshot, glide the pieces a just-released remote drag produced —
+    // moved piles and newly-appeared piles/items — in from the release point.
+    useLayoutEffect(() => {
+        const prev = prevTableRef.current
+        const pilePos = new Map(state.piles.map((p) => [p.id, { x: p.x, y: p.y }]))
+        const itemIds = new Set()
+        for (const z of state.zones) for (const it of z.items) itemIds.add(it.id)
+
+        if (released.length && tableRef.current) {
+            for (const r of released) {
+                const sels = []
+                // Pieces with a stable id that actually moved (a relocation).
+                for (const id of r.pieceIds) {
+                    const cur = pilePos.get(id)
+                    const old = prev.pilePos.get(id)
+                    if (cur && old && (cur.x !== old.x || cur.y !== old.y))
+                        sels.push(`[data-pile="${id}"]`)
+                }
+                // Pieces that didn't exist before (a play, split, or move out of a zone).
+                for (const id of pilePos.keys())
+                    if (!prev.pilePos.has(id)) sels.push(`[data-pile="${id}"]`)
+                for (const id of itemIds)
+                    if (!prev.itemIds.has(id)) sels.push(`[data-zoneitem="${id}"]`)
+                flyFrom(sels, r.point.x, r.point.y)
+            }
+            setReleased([])
+        }
+        prevTableRef.current = { pilePos, itemIds }
+    }, [state])
+
+    // Glide the given table elements in from a table-pixel point (the same FLY the
+    // local optimistic drop uses, but sourced from another player's release point).
+    function flyFrom(selectors, tableX, tableY) {
+        const t = tableRef.current
+        if (!t || !selectors.length) return
+        const rect = t.getBoundingClientRect()
+        const fromX = rect.left + tableX
+        const fromY = rect.top + tableY
+        for (const sel of selectors) {
+            const el = t.querySelector(sel)
+            if (!el) continue
+            const r = el.getBoundingClientRect()
+            const dx = fromX - r.left
+            const dy = fromY - r.top
+            if (!dx && !dy) continue
+            el.style.transition = 'none'
+            el.style.transform = `translate(${dx}px, ${dy}px)`
+            requestAnimationFrame(() => {
+                el.style.transition = `transform ${FLY_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`
+                el.style.transform = ''
+            })
+            el.addEventListener(
+                'transitionend',
+                () => {
+                    el.style.transition = ''
+                    el.style.transform = ''
+                },
+                { once: true },
+            )
+        }
+    }
+
     // ---- drag plumbing (shared by pile + hand drags) --------------------
     function beginDrag(e, partial) {
         e.preventDefault()
@@ -276,6 +400,7 @@ export default function Game({ game }) {
         d.clientY = e.clientY
         if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > CLICK_SLOP) d.moved = true
         setDrag({ ...d })
+        liveBroadcast(d)
     }
 
     function onUp(e) {
@@ -285,11 +410,64 @@ export default function Game({ game }) {
         dragRef.current = null
         setDrag(null)
         if (!d) return
+        if (d.broadcasting) actions.endDrag() // clear the live ghost for everyone
         if (d.kind === 'group') endGroupDrag(d, e)
         else if (d.kind === 'pile') endPileDrag(d, e)
         else if (d.kind === 'zone') endZoneDrag(d, e)
         else if (d.kind === 'zoneitem') endZoneItemDrag(d, e)
+        else if (d.kind === 'handgroup') endHandGroupDrag(d, e)
         else endHandDrag(d, e)
+    }
+
+    // ---- live drag broadcast --------------------------------------------
+    // Mirror a table-visible drag to other players in real time. The hand is
+    // private, so hand drags are never broadcast (the card only appears once it's
+    // actually played). Positions are table-pixel coords — the same space piles
+    // use — so a ghost lands in the same spot on every client.
+    function liveDragPos(d) {
+        const rect = tableRef.current?.getBoundingClientRect()
+        if (!rect) return null
+        return {
+            x: Math.round(d.clientX - rect.left - (d.offsetX || 0)),
+            y: Math.round(d.clientY - rect.top - (d.offsetY || 0)),
+        }
+    }
+
+    function liveDragInfo(d, pos) {
+        const base = { x: pos.x, y: pos.y }
+        if (d.kind === 'pile') {
+            const pile = stateRef.current.piles.find((p) => p.id === d.id)
+            return { ...base, kind: 'pile', pieceIds: [d.id], card: pile?.cards.at(-1) ?? null }
+        }
+        if (d.kind === 'zoneitem') {
+            return { ...base, kind: 'zoneitem', pieceIds: [d.id], card: d.card ?? null }
+        }
+        if (d.kind === 'group') {
+            const anchor = d.members.find((m) => m.id === d.id) ?? d.members[0]
+            return {
+                ...base,
+                kind: 'group',
+                pieceIds: d.members.map((m) => m.id),
+                card: anchor?.cards?.at(-1) ?? null,
+            }
+        }
+        // zone: the whole zone is moved live (no card ghost).
+        return { ...base, kind: 'zone', pieceIds: [d.id], card: null }
+    }
+
+    function liveBroadcast(d) {
+        if (!d.moved || d.kind === 'hand' || d.kind === 'handgroup') return // hand is private
+        const pos = liveDragPos(d)
+        if (!pos) return
+        const now = performance.now()
+        if (!d.broadcasting) {
+            d.broadcasting = true
+            d.lastSent = now
+            actions.startDrag(liveDragInfo(d, pos))
+        } else if (now - (d.lastSent || 0) > DRAG_THROTTLE_MS) {
+            d.lastSent = now
+            actions.moveDrag(pos.x, pos.y)
+        }
     }
 
     // ---- marquee multi-select -------------------------------------------
@@ -373,6 +551,7 @@ export default function Game({ game }) {
     function startGroupDrag(e, anchorId, rect) {
         const members = []
         for (const id of selectedIds) {
+            if (isLocked(id)) continue // skip pieces another player is dragging
             const loc = locate(id)
             if (!loc) continue
             if (loc.kind === 'pile')
@@ -406,6 +585,7 @@ export default function Game({ game }) {
     // ---- pile drag ------------------------------------------------------
     function startPileDrag(e, pile) {
         if (e.button === 2) return // right click opens the context menu instead
+        if (isLocked(pile.id)) return // another player is dragging this pile
         setMenu(null)
         setSelMenu(null)
         const rect = e.currentTarget.getBoundingClientRect()
@@ -736,6 +916,7 @@ export default function Game({ game }) {
 
     function startZoneDrag(e, zone) {
         if (e.button === 2) return
+        if (isLocked(zone.id)) return // another player is moving this zone
         setMenu(null)
         setZoneMenu(null)
         bringZoneToFront(zone.id)
@@ -766,6 +947,7 @@ export default function Game({ game }) {
     function startZoneItemDrag(e, zoneId, item) {
         if (e.button === 2) return
         e.stopPropagation()
+        if (isLocked(item.id)) return // another player is dragging this card
         setItemMenu(null)
         bringZoneToFront(zoneId)
         const el = e.currentTarget
@@ -976,6 +1158,17 @@ export default function Game({ game }) {
 
     // ---- hand drag ------------------------------------------------------
     function startHandDrag(e, card) {
+        if (e.button === 2) return
+        // A modifier press is a selection-box gesture (handled by the hand marquee),
+        // not a card drag — let it fall through to the container's handler.
+        if (e.shiftKey || e.ctrlKey || e.metaKey) return
+        // Grabbing a card that's part of a multi-selection drags the whole hand
+        // selection (to play or reorder them together).
+        if (handSel.has(card.id) && handSel.size > 1) {
+            startHandGroupDrag(e, card)
+            return
+        }
+        if (handSel.size) setHandSel(new Set()) // grabbing an unselected card clears it
         const rect = e.currentTarget.getBoundingClientRect()
         // Snapshot each card's centre once, up front. Computing the insertion index
         // against this fixed snapshot (instead of the live, reordering DOM) keeps the
@@ -992,6 +1185,106 @@ export default function Game({ game }) {
             offsetY: e.clientY - rect.top,
             centers,
         })
+    }
+
+    // ---- hand group drag (marquee selection of hand cards) ---------------
+    function startHandGroupDrag(e, card) {
+        const rect = e.currentTarget.getBoundingClientRect()
+        const ids = state.hand.filter((c) => handSel.has(c.id)).map((c) => c.id) // hand order
+        const cards = state.hand.filter((c) => handSel.has(c.id))
+        // Reorder index is measured against the cards that AREN'T moving, so snapshot
+        // just their centres.
+        const centers = [...handRef.current.querySelectorAll('[data-handcard]')]
+            .filter((el) => !handSel.has(el.dataset.handcard))
+            .map((el) => {
+                const r = el.getBoundingClientRect()
+                return { id: el.dataset.handcard, cx: r.left + r.width / 2 }
+            })
+        beginDrag(e, {
+            kind: 'handgroup',
+            id: card.id, // the grabbed (anchor) card
+            ids,
+            cards,
+            offsetX: e.clientX - rect.left,
+            offsetY: e.clientY - rect.top,
+            centers,
+        })
+    }
+
+    // Where a dragged hand selection would land: a zone, a pile, the open table,
+    // or a reorder position within the hand (index among the non-moving cards).
+    function computeHandGroupTarget(d, clientX, clientY) {
+        const hand = handRef.current.getBoundingClientRect()
+        const zone = zoneAtPoint(clientX, clientY)
+        if (zone)
+            return {
+                type: 'zone',
+                zoneId: zone.id,
+                index: zoneInsertIndex(zone.el, clientX, clientY),
+            }
+        if (clientY < hand.top) {
+            const pile = pileAtPoint(clientX, clientY)
+            return pile ? { type: 'pile', pileId: pile.id } : { type: 'table' }
+        }
+        return { type: 'hand', index: d.centers.filter((c) => c.cx < clientX).length }
+    }
+
+    // The hand order while reordering a selected block: the non-moving cards with
+    // the selected block (in its current order) spliced in at `index`.
+    function handGroupOrder(d, index) {
+        const sel = new Set(d.ids)
+        const block = state.hand.filter((c) => sel.has(c.id))
+        const rest = state.hand.filter((c) => !sel.has(c.id))
+        rest.splice(Math.min(index, rest.length), 0, ...block)
+        return rest
+    }
+
+    function endHandGroupDrag(d, e) {
+        if (!d.moved) return
+        const t = computeHandGroupTarget(d, e.clientX, e.clientY)
+        const byId = new Map(stateRef.current.hand.map((c) => [c.id, c]))
+        const ids = d.ids.filter((id) => byId.has(id))
+        if (!ids.length) return
+        const fromX = e.clientX - d.offsetX
+        const fromY = e.clientY - d.offsetY
+
+        if (t.type === 'zone') {
+            const hide = new Set(ids)
+            const addZoneItems = ids.map((id, i) => ({
+                zoneId: t.zoneId,
+                index: t.index + i,
+                item: { id: `opt-${id}`, count: 1, cards: [cardView(byId.get(id), playFaceUp)] },
+            }))
+            setPending({ hide, addPiles: [], addZoneItems, fromX, fromY })
+            bringZoneToFront(t.zoneId)
+            actions.handCardsToZone(ids, t.zoneId, t.index, playFaceUp)
+            setHandSel(new Set())
+        } else if (t.type === 'table' || t.type === 'pile') {
+            const table = tableRef.current.getBoundingClientRect()
+            const baseX = e.clientX - table.left - d.offsetX
+            const baseY = e.clientY - table.top - d.offsetY
+            const placements = {}
+            const addPiles = []
+            const hide = new Set()
+            ids.forEach((id, i) => {
+                const { x, y } = clampSafe(baseX + i * 26, baseY + i * 26)
+                placements[id] = { x, y }
+                addPiles.push({
+                    id: `opt-${id}`,
+                    x,
+                    y,
+                    count: 1,
+                    cards: [cardView(byId.get(id), playFaceUp)],
+                })
+                hide.add(id)
+            })
+            setPending({ hide, addPiles, addZoneItems: [], fromX, fromY })
+            actions.playMany(ids, placements, playFaceUp)
+            setHandSel(new Set())
+        } else {
+            setOptimisticHand(handGroupOrder(d, t.index)) // hold the new order until confirmed
+            actions.reorderHandMany(ids, t.index)
+        }
     }
 
     // Where the dragged card would land — over a zone adds it to that zone, over
@@ -1099,6 +1392,9 @@ export default function Game({ game }) {
             window.removeEventListener('pointerup', onUp)
             window.removeEventListener('pointermove', onMarqueeMove)
             window.removeEventListener('pointerup', onMarqueeUp)
+            releaseTimers.current.forEach(clearTimeout)
+            // If we unmount mid-drag, release the live ghost so it doesn't stick.
+            if (dragRef.current?.broadcasting) actions.endDrag()
         },
         [],
     )
@@ -1118,7 +1414,9 @@ export default function Game({ game }) {
 
     let handCards = optimisticHand || display.hand
     let activeId = null
+    let activeHandIds = null // selected cards previewed in-row during a group reorder
     let tablePreview = null
+    let handGroupGhost = false
     if (drag?.kind === 'hand' && handTarget) {
         if (
             handTarget.type === 'table' ||
@@ -1132,6 +1430,20 @@ export default function Game({ game }) {
         } else {
             handCards = handOrderWith(drag, handTarget.index)
             activeId = drag.id
+        }
+    } else if (drag?.kind === 'handgroup' && drag.moved && tableRef.current && handRef.current) {
+        // Live preview for a hand-selection drag. Reordering: the selected block
+        // slides to its insertion point (the other cards reflow to open the gap,
+        // just like a single card). Leaving: the block is pulled out so the rest
+        // closes up, and a floating ghost follows the cursor.
+        const t = computeHandGroupTarget(drag, drag.clientX, drag.clientY)
+        const sel = new Set(drag.ids)
+        if (t.type === 'hand') {
+            handCards = handGroupOrder(drag, t.index)
+            activeHandIds = sel
+        } else {
+            handCards = (optimisticHand || display.hand).filter((c) => !sel.has(c.id))
+            handGroupGhost = true
         }
     }
 
@@ -1239,6 +1551,11 @@ export default function Game({ game }) {
     const myBoard = amSeated ? boards.find((b) => b.seat === me.seat) : null
     const otherBoards = boards.filter((b) => b !== myBoard)
 
+    // Pieces locked by another player's live drag, and any zone being moved live.
+    const lockedIds = new Set(lockedBy.keys())
+    const remoteZoneMove = new Map() // zoneId -> the remote drag moving it
+    for (const d of remoteDrags) if (d.kind === 'zone') remoteZoneMove.set(d.pieceIds[0], d)
+
     return (
         <div className="game">
             <header className="topbar">
@@ -1311,6 +1628,12 @@ export default function Game({ game }) {
                         left = drag.clientX - r.left - drag.offsetX
                         top = drag.clientY - r.top - drag.offsetY
                     }
+                    // Another player moving this zone: track their cursor live.
+                    const remoteMove = remoteZoneMove.get(zone.id)
+                    if (remoteMove) {
+                        left = remoteMove.x
+                        top = remoteMove.y
+                    }
                     return (
                         <Zone
                             key={zone.id}
@@ -1318,9 +1641,10 @@ export default function Game({ game }) {
                             items={zoneItemsFor(zone)}
                             left={left}
                             top={top}
-                            dragging={zdragging}
+                            dragging={zdragging || !!remoteMove}
                             highlight={highlightZoneId === zone.id}
                             selectedIds={selectedIds}
+                            lockedIds={lockedIds}
                             activeItemId={zone.id === drag?.zoneId ? activeZoneItemId : null}
                             onHeaderPointerDown={(e) => startZoneDrag(e, zone)}
                             onItemPointerDown={(e, item) => startZoneItemDrag(e, zone.id, item)}
@@ -1349,6 +1673,7 @@ export default function Game({ game }) {
                         selectedIds={selectedIds}
                         activeItemId={myBoard.id === drag?.zoneId ? activeZoneItemId : null}
                         fixed
+                        lockedIds={lockedIds}
                         className="board board-self"
                         label="Your area"
                         onItemPointerDown={(e, item) => startZoneItemDrag(e, myBoard.id, item)}
@@ -1403,6 +1728,7 @@ export default function Game({ game }) {
                                 selectedIds={selectedIds}
                                 activeItemId={board.id === drag?.zoneId ? activeZoneItemId : null}
                                 fixed
+                                lockedIds={lockedIds}
                                 className={`board board-station ${owner ? '' : 'empty'} ${
                                     owner && !owner.connected ? 'offline' : ''
                                 }`}
@@ -1474,6 +1800,7 @@ export default function Game({ game }) {
                             settling={!!optimistic && !dragging}
                             selected={selectedIds.has(pile.id)}
                             highlight={highlightPileId === pile.id}
+                            locked={isLocked(pile.id)}
                             onPointerDown={(e) => startPileDrag(e, pile)}
                             onContextMenu={(e) => openPileMenu(e, pile)}
                         />
@@ -1520,6 +1847,52 @@ export default function Game({ game }) {
                         <Card card={drag.card} />
                     </div>
                 )}
+
+                {/* Other players' live drags: a ghost card (or, for a zone, just the
+                    tag — the zone itself tracks their cursor) labelled with who's
+                    dragging, following their pointer in real time. */}
+                {remoteDrags.map((d) => {
+                    const owner = state.players.find((p) => p.id === d.playerId)
+                    const showCard = d.kind !== 'zone' && d.card
+                    return (
+                        <div
+                            key={d.playerId}
+                            className="remote-drag"
+                            style={{ left: d.x, top: d.y }}
+                        >
+                            {showCard && (
+                                <div className="remote-ghost">
+                                    <Card card={d.card} />
+                                    {d.kind === 'group' && d.pieceIds.length > 1 && (
+                                        <span className="count-badge">{d.pieceIds.length}</span>
+                                    )}
+                                </div>
+                            )}
+                            <span
+                                className="drag-tag"
+                                style={{ background: owner?.color ?? '#555' }}
+                            >
+                                {owner?.name ?? 'Player'}
+                            </span>
+                        </div>
+                    )
+                })}
+
+                {/* A just-released remote drag: the ghost lingers at the drop point
+                    until the snapshot lands, so the card never blinks out and back. */}
+                {released.map((r) =>
+                    r.kind !== 'zone' && r.card ? (
+                        <div
+                            key={`rel-${r.id}`}
+                            className="remote-drag"
+                            style={{ left: r.point.x, top: r.point.y }}
+                        >
+                            <div className="remote-ghost">
+                                <Card card={r.card} />
+                            </div>
+                        </div>
+                    ) : null,
+                )}
             </main>
 
             {amSeated && (
@@ -1528,6 +1901,7 @@ export default function Game({ game }) {
                     cards={handCards}
                     actions={actions}
                     activeId={activeId}
+                    activeIds={activeHandIds}
                     highlight={handHighlight}
                     mode={handMode}
                     onToggleDisplay={() => toggleDisplay('hand', 'overlapped')}
@@ -1535,6 +1909,9 @@ export default function Game({ game }) {
                     onTogglePlayFace={() => setPlayFaceUp((v) => !v)}
                     onSort={openHandSort}
                     onCardPointerDown={startHandDrag}
+                    selectedIds={handSel}
+                    onSelectionChange={setHandSel}
+                    disableHover={!!drag || !!marquee}
                 />
             )}
 
@@ -1562,6 +1939,21 @@ export default function Game({ game }) {
                     {groupGhost.members.length > 1 && (
                         <span className="count-badge">{groupGhost.members.length}</span>
                     )}
+                </div>
+            )}
+
+            {/* A hand selection being dragged out to play: a floating ghost + count.
+                (While reordering within the hand, the block previews in-row instead.) */}
+            {handGroupGhost && (
+                <div
+                    className="drag-ghost"
+                    style={{
+                        left: drag.clientX - drag.offsetX,
+                        top: drag.clientY - drag.offsetY,
+                    }}
+                >
+                    <Card card={drag.cards.find((c) => c.id === drag.id) ?? drag.cards[0]} />
+                    {drag.ids.length > 1 && <span className="count-badge">{drag.ids.length}</span>}
                 </div>
             )}
 

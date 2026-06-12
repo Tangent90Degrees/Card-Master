@@ -22,6 +22,7 @@ export default function Pile({
     settling,
     selected,
     highlight,
+    locked, // another player is dragging this pile — not grabbable
     onPointerDown,
     onContextMenu,
 }) {
@@ -89,7 +90,7 @@ export default function Pile({
         <div
             ref={rootRef}
             data-pile={pile.id}
-            className={`pile ${dragging ? 'dragging' : ''} ${settling ? 'settling' : ''} ${selected ? 'selected' : ''} ${highlight ? 'highlight' : ''} ${pile.count > 1 ? 'stacked' : ''}`}
+            className={`pile ${dragging ? 'dragging' : ''} ${settling ? 'settling' : ''} ${selected ? 'selected' : ''} ${highlight ? 'highlight' : ''} ${locked ? 'locked' : ''} ${pile.count > 1 ? 'stacked' : ''}`}
             style={{ left, top }}
             onPointerDown={onPointerDown}
             onContextMenu={onContextMenu}
